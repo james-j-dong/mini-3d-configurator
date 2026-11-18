@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Carbon look spike (throwaway)</title>
+<style>
+  :root { color-scheme: dark; --bg: #4b4b4b; --panel: #3f3f3f; --fg: #fff; --muted: rgba(255,255,255,.65); --accent: #ffee00; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg); font: 14px/1.4 system-ui, sans-serif; }
+  .app { display: grid; grid-template-columns: 1fr 340px; height: 100%; }
+  .viewer { position: relative; background: radial-gradient(ellipse at 50% 38%, #303030, #0b0b0b 72%); overflow: hidden; touch-action: none; }
+  .viewer canvas { display: block; width: 100%; height: 100%; }
+  .hint { position: absolute; left: 12px; bottom: 10px; font-size: 12px; color: var(--muted); pointer-events: none; }
+  .loading { position: absolute; inset: 0; display: grid; place-items: center; color: var(--muted); pointer-events: none; }
+  .panel { background: var(--panel); padding: 16px; overflow-y: auto; }
+  h1 { font-size: 17px; margin: 0 0 2px; }
+  .sub { color: var(--muted); font-size: 12px; margin-bottom: 10px; }
+  .group { margin-top: 14px; }
+  .label { font-size: 12px; color: var(--muted); margin-bottom: 6px; }
+  .row { display: flex; flex-wrap: wrap; gap: 6px; }
+  button { background: transparent; color: var(--fg); border: 1px solid rgba(255,255,255,.35); border-radius: 4px; padding: 7px 10px; font: inherit; font-size: 13px; cursor: pointer; }
+  button.on { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+  button.action { background: var(--accent); color: #252525; border-color: var(--accent); font-weight: 600; }
+  pre { background: #1d1d1d; color: #9f9; font: 11.5px/1.45 ui-monospace, monospace; padding: 10px; border-radius: 4px; white-space: pre-wrap; margin: 6px 0 0; }
+  .note { font-size: 12px; color: var(--muted); margin-top: 6px; }
+  @media (max-width: 760px) {
+    .app { grid-template-columns: 1fr; grid-template-rows: 50svh 1fr; }
+  }
+</style>
+<script type="importmap">
+{ "imports": {
+  "three": "/node_modules/three/build/three.module.js",
+  "three/addons/": "/node_modules/three/examples/jsm/"
+} }
+</script>
+</head>
+<body>
+<div class="app">
+  <div class="viewer" id="viewer">
+    <div class="loading" id="loading">Loading…</div>
+    <div class="hint">⟲ drag to spin · scroll or pinch to zoom</div>
+  </div>
+  <div class="panel">
+    <h1>OB1 carbon look test</h1>
+    <div class="sub">Throwaway spike · real round knob and 6+R Down plate from your STEP files · body is a stand-in box</div>
+
+    <div class="group">
+      <div class="label">Shift Knob</div>
+      <div class="row" data-group="knob">
+        <button data-value="round-weave">Round · Carbon Weave</button>
+        <button data-value="round-forged">Round · Carbon Forged</button>
+        <button data-value="ball-gunmetal">Ball · Gunmetal*</button>
+        <button data-value="ball-silver">Ball · Silver*</button>
+        <button data-value="ball-blue">Ball · Blue*</button>
+      </div>
+      <div class="note">* plain sphere stand-in until the ball-knob file arrives</div>
+    </div>
+
+    <div class="group">
+      <div class="label">Shift Plate Style</div>
+      <div class="row" data-group="plate">
+        <button data-value="weave">Carbon Weave</button>
+        <button data-value="forged">Forged Carbon</button>
+      </div>
+    </div>
+
+    <div class="group">
+      <div class="label">Look experiments</div>
+      <div class="row" data-group="toggles">
+        <button data-toggle="anisotropy">Fibre sheen</button>
+        <button data-toggle="clearcoat">Clear coat</button>
+        <button data-toggle="secondBody">TPU grommet</button>
+      </div>
+    </div>
+
+    <div class="group">
+      <div class="label">Render resolution (× screen pixels)</div>
+      <div class="row" data-group="dpr">
+        <button data-value="1">1×</button>
+        <button data-value="1.5">1.5×</button>
+        <button data-value="2">2×</button>
+      </div>
+    </div>
+
+    <div class="group">
+      <div class="label">Speed test (spins and swaps finishes for 6 s)</div>
+      <div class="row"><button class="action" id="bench">Run speed test</button></div>
+      <pre id="benchOut">not run yet</pre>
+    </div>
+
+    <div class="group">
+      <div class="label">Stats</div>
+      <pre id="stats">…</pre>
+    </div>
+  </div>
+</div>
+<script type="module" src="./spike.js"></script>
+</body>
+</html>

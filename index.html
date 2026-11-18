@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>OB1 H-Pattern Sim Shifter</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="/src/site/style.css">
+</head>
+<body>
+  <main class="layout">
+    <section class="stage" aria-label="3D view">
+      <!-- The embed snippet: the same two lines a store page will use. -->
+      <mini3d-viewer product="ob1"></mini3d-viewer>
+      <script type="module" src="/src/viewer/loader.ts"></script>
+    </section>
+    <aside class="panel">
+      <h1>OB1 H-Pattern Sim Shifter</h1>
+      <div id="picker" class="picker" aria-live="off"></div>
+      <section class="summary" aria-labelledby="summary-title">
+        <h2 id="summary-title">Your build</h2>
+        <dl id="summary"></dl>
+      </section>
+    </aside>
+  </main>
+  <script type="module" src="/src/site/main.ts"></script>
+</body>
+</html>

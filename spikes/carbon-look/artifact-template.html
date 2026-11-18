@@ -1,0 +1,106 @@
+<title>OB1 Carbon Look Test</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<style>
+  /* Layout: one-screen test bench. 3D on the left with options on the right; on phones the 3D takes the top half. Single dark look, like the store's product section. */
+  :root {
+    color-scheme: dark;
+    --bg: #4b4b4b;          /* store product section grey */
+    --panel: #3f3f40;
+    --fg: #ffffff;
+    --muted: rgba(255, 255, 255, 0.66);
+    --line: rgba(255, 255, 255, 0.34);
+    --accent: #ffee00;      /* store button yellow */
+    --on-accent: #252525;
+    --readout-bg: #1c1d1e;
+    --readout-fg: #a6f5a6;
+    --studio-hi: #303030;
+    --studio-lo: #0b0b0b;
+    --font-ui: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    --font-data: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body { margin: 0; background: var(--bg); color: var(--fg); font: 14px/1.4 var(--font-ui); }
+  .app { display: grid; grid-template-columns: minmax(0, 1fr) 340px; height: 100%; }
+  .viewer { position: relative; min-width: 0; background: radial-gradient(ellipse at 50% 38%, var(--studio-hi), var(--studio-lo) 72%); overflow: hidden; touch-action: none; }
+  .viewer canvas { display: block; width: 100%; height: 100%; }
+  .hint { position: absolute; left: max(12px, env(safe-area-inset-left, 0px)); bottom: 10px; font-size: 12px; color: var(--muted); pointer-events: none; }
+  .loading { position: absolute; inset: 0; display: grid; place-items: center; color: var(--muted); pointer-events: none; }
+  .panel { background: var(--panel); overflow-y: auto; min-width: 0; padding-block: 16px 24px; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+  h1 { font-size: 17px; margin: 0 0 2px; text-wrap: balance; }
+  .sub { color: var(--muted); font-size: 12px; }
+  .group { margin-top: 14px; }
+  .label { font-size: 12px; color: var(--muted); margin-bottom: 6px; letter-spacing: 0.02em; }
+  .row { display: flex; flex-wrap: wrap; gap: 6px; }
+  button { background: transparent; color: var(--fg); border: 1px solid var(--line); border-radius: 4px; padding: 8px 10px; font: inherit; font-size: 13px; cursor: pointer; }
+  button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  button.on { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+  button.action { background: var(--accent); color: var(--on-accent); border-color: var(--accent); font-weight: 600; }
+  pre { background: var(--readout-bg); color: var(--readout-fg); font: 11.5px/1.45 var(--font-data); font-variant-numeric: tabular-nums; padding: 10px; border-radius: 4px; white-space: pre-wrap; overflow-wrap: anywhere; margin: 6px 0 0; }
+  .note { font-size: 12px; color: var(--muted); margin-top: 6px; }
+  @media (max-width: 760px) {
+    .app { grid-template-columns: minmax(0, 1fr); grid-template-rows: 50% minmax(0, 1fr); }
+  }
+</style>
+
+<div class="app">
+  <div class="viewer" id="viewer">
+    <div class="loading" id="loading">Loading…</div>
+    <div class="hint">⟲ drag to spin · pinch or scroll to zoom</div>
+  </div>
+  <div class="panel">
+    <h1>OB1 carbon look test</h1>
+    <div class="sub">Throwaway test · real round knob, 6+R Down plate and TPU grommet from your CAD files · the body is a stand-in box</div>
+
+    <div class="group">
+      <div class="label">Shift Knob</div>
+      <div class="row" data-group="knob">
+        <button id="knob-round-weave" data-value="round-weave">Round · Carbon Weave</button>
+        <button id="knob-round-forged" data-value="round-forged">Round · Carbon Forged</button>
+        <button id="knob-ball-gunmetal" data-value="ball-gunmetal">Ball · Gunmetal*</button>
+        <button id="knob-ball-silver" data-value="ball-silver">Ball · Silver*</button>
+        <button id="knob-ball-blue" data-value="ball-blue">Ball · Blue*</button>
+      </div>
+      <div class="note">* plain sphere stand-in until the ball-knob file arrives</div>
+    </div>
+
+    <div class="group">
+      <div class="label">Shift Plate Style</div>
+      <div class="row" data-group="plate">
+        <button id="plate-weave" data-value="weave">Carbon Weave</button>
+        <button id="plate-forged" data-value="forged">Forged Carbon</button>
+      </div>
+    </div>
+
+    <div class="group">
+      <div class="label">Look experiments</div>
+      <div class="row" data-group="toggles">
+        <button id="toggle-aniso" data-toggle="anisotropy">Fibre sheen</button>
+        <button id="toggle-clearcoat" data-toggle="clearcoat">Clear coat</button>
+        <button id="toggle-grommet" data-toggle="secondBody">TPU grommet</button>
+      </div>
+    </div>
+
+    <div class="group">
+      <div class="label">Render resolution (× screen pixels)</div>
+      <div class="row" data-group="dpr">
+        <button id="dpr-1" data-value="1">1×</button>
+        <button id="dpr-15" data-value="1.5">1.5×</button>
+        <button id="dpr-2" data-value="2">2×</button>
+      </div>
+    </div>
+
+    <div class="group">
+      <div class="label">Speed test: spins and swaps finishes for 6 s</div>
+      <div class="row"><button class="action" id="bench">Run speed test</button></div>
+      <pre id="benchOut">Not run yet. Leave the phone still while it runs.</pre>
+    </div>
+
+    <div class="group">
+      <div class="label">Stats</div>
+      <pre id="stats">…</pre>
+    </div>
+  </div>
+</div>
+<script>/*__MODELS__*/</script>
+<script type="module">/*__BUNDLE__*/</script>

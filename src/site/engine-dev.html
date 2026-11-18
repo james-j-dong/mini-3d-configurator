@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Engine dev harness</title>
+  <style>
+    html, body { margin: 0; height: 100%; background: radial-gradient(circle at 50% 40%, #3a3a3c, #161617 70%); color: #eee; font: 13px/1.4 system-ui, sans-serif; overflow: hidden; }
+    #view { position: fixed; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; }
+    #panel { position: fixed; top: 12px; left: 12px; display: flex; flex-direction: column; gap: 6px; max-width: 360px; }
+    button { font: inherit; padding: 6px 10px; border-radius: 6px; border: 1px solid #666; background: #2a2a2b; color: #fff; text-align: left; cursor: pointer; }
+    pre { margin: 0; padding: 8px; background: rgba(0,0,0,.55); border-radius: 6px; white-space: pre-wrap; font-size: 12px; }
+  </style>
+</head>
+<body>
+  <canvas id="view"></canvas>
+  <div id="panel">
+    <div id="options"></div>
+    <button id="speed">Speed test</button>
+    <pre id="out">loading…</pre>
+    <pre id="stats"></pre>
+  </div>
+  <script type="module" src="./engine-dev.ts"></script>
+</body>
+</html>

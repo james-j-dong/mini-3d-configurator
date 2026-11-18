@@ -1,0 +1,150 @@
+{
+  "schemaVersion": 1,
+  "id": "ob1",
+  "name": "OB1 H-Pattern Sim Shifter",
+  "sources": {
+    "knob-round": { "file": "assets/source/SHIFT_KNOB_ROUND (M12x1.25)_REV2 (1).STEP", "units": "mm", "upAxis": "y", "bodyCount": 1 },
+    "knob-senna": { "file": "assets/source/SHIFT_KNOB_SENNA (M12x1.25)_REV2 (2).STEP", "units": "mm", "upAxis": "y", "bodyCount": 1 },
+    "plate-6r-down": { "file": "assets/source/OB1-SHPL_6RDOWN_AL_REV5.STEP", "units": "mm", "upAxis": "y", "bodyCount": 2 },
+    "plate-6r-up": { "file": "assets/source/OB1-SHPL_6RUP_AL_REV5.STEP", "units": "mm", "upAxis": "y", "bodyCount": 2 },
+    "plate-7r": { "file": "assets/source/OB1-SHPL-7R_AL_REV5.STEP", "units": "mm", "upAxis": "y", "bodyCount": 2 }
+  },
+  "models": {
+    "body": {
+      "kind": "box",
+      "sizeMm": [90, 100, 90],
+      "sockets": {
+        "plateMount": { "positionMm": [0, 100, 0] },
+        "stickPivot": { "positionMm": [0, 100, 0] }
+      }
+    },
+    "rod": {
+      "kind": "cylinder",
+      "radiusMm": 6,
+      "heightMm": 81,
+      "sockets": { "tip": { "positionMm": [0, 81, 0] } }
+    },
+    "knob-round": {
+      "kind": "converted",
+      "source": "knob-round",
+      "bodyIndex": 0,
+      "faceRules": [{ "kind": "dropNearAxis", "maxRadiusMm": 6.3, "maxHeightMm": 17 }]
+    },
+    "knob-senna": {
+      "kind": "converted",
+      "source": "knob-senna",
+      "bodyIndex": 0,
+      "faceRules": [{ "kind": "dropNearAxis", "maxRadiusMm": 6.3, "maxHeightMm": 17 }]
+    },
+    "knob-ball": { "kind": "sphere", "radiusMm": 22, "attachPointMm": [0, -18, 0] },
+    "plate-6r-down": { "kind": "converted", "source": "plate-6r-down", "bodyIndex": 1 },
+    "plate-6r-up": { "kind": "converted", "source": "plate-6r-up", "bodyIndex": 1 },
+    "plate-7r": { "kind": "converted", "source": "plate-7r", "bodyIndex": 1 },
+    "grommet-6r-down": { "kind": "converted", "source": "plate-6r-down", "bodyIndex": 0 },
+    "grommet-6r-up": { "kind": "converted", "source": "plate-6r-up", "bodyIndex": 0 },
+    "grommet-7r": { "kind": "converted", "source": "plate-7r", "bodyIndex": 0 }
+  },
+  "finishes": {
+    "carbonWeave": { "kind": "carbonWeave", "towMm": 2.4 },
+    "forgedCarbon": { "kind": "forgedCarbon", "tileMm": 50 },
+    "anodizedGrey": { "kind": "metal", "color": "#8d9096", "roughness": 0.45 },
+    "gunmetal": { "kind": "metal", "color": "#8c9097", "roughness": 0.18 },
+    "silver": { "kind": "metal", "color": "#d2d6da", "roughness": 0.18 },
+    "blue": { "kind": "metal", "color": "#2f62c9", "roughness": 0.28 },
+    "tpuGrey": { "kind": "matte", "color": "#2b2b2d", "roughness": 0.85 },
+    "bodyBlack": { "kind": "metal", "color": "#141414", "roughness": 0.55 },
+    "steel": { "kind": "metal", "color": "#dddddd", "roughness": 0.12 }
+  },
+  "slots": [
+    { "id": "body", "model": "body", "finish": "bodyBlack" },
+    { "id": "plate", "parent": "body", "socket": "plateMount", "placement": "socket", "model": "plate-6r-down", "finish": "carbonWeave" },
+    { "id": "grommet", "parent": "plate", "placement": "asInCad", "model": "grommet-6r-down", "finish": "tpuGrey" },
+    { "id": "rod", "parent": "body", "socket": "stickPivot", "placement": "socket", "model": "rod", "finish": "steel" },
+    { "id": "knob", "parent": "rod", "socket": "tip", "placement": "socket", "model": "knob-round", "finish": "carbonWeave" }
+  ],
+  "options": [
+    {
+      "name": "Shift Knob",
+      "values": [
+        {
+          "name": "Aluminum | Gunmetal",
+          "sets": [{ "slot": "knob", "model": "knob-ball", "finish": "gunmetal" }],
+          "swatch": { "css": "radial-gradient(circle at 35% 30%,#9a9fa5,#3b3e42 55%,#1d1f21)" }
+        },
+        {
+          "name": "Aluminum | Silver",
+          "sets": [{ "slot": "knob", "model": "knob-ball", "finish": "silver" }],
+          "swatch": { "css": "radial-gradient(circle at 35% 30%,#fff,#b9bec3 50%,#6d7378)" }
+        },
+        {
+          "name": "Aluminum | Blue",
+          "sets": [{ "slot": "knob", "model": "knob-ball", "finish": "blue" }],
+          "swatch": { "css": "radial-gradient(circle at 35% 30%,#9cc2ff,#2f62c9 55%,#173270)" }
+        },
+        {
+          "name": "Carbon Weave | Teardrop",
+          "sets": [{ "slot": "knob", "model": "knob-senna", "finish": "carbonWeave" }],
+          "swatch": { "css": "repeating-conic-gradient(#181818 0 25%,#3d3d3d 0 50%) 0 0/4px 4px" }
+        },
+        {
+          "name": "Carbon Weave | Round",
+          "sets": [{ "slot": "knob", "model": "knob-round", "finish": "carbonWeave" }],
+          "swatch": { "css": "repeating-conic-gradient(#181818 0 25%,#3d3d3d 0 50%) 0 0/4px 4px" }
+        },
+        {
+          "name": "Carbon Forged | Teardrop",
+          "sets": [{ "slot": "knob", "model": "knob-senna", "finish": "forgedCarbon" }],
+          "swatch": { "css": "radial-gradient(circle at 30% 30%,#5a5a5a 0 13%,transparent 14%),radial-gradient(circle at 70% 58%,#4a4a4a 0 16%,transparent 17%),#1c1c1c" }
+        },
+        {
+          "name": "Carbon Forged | Round",
+          "sets": [{ "slot": "knob", "model": "knob-round", "finish": "forgedCarbon" }],
+          "swatch": { "css": "radial-gradient(circle at 30% 30%,#5a5a5a 0 13%,transparent 14%),radial-gradient(circle at 70% 58%,#4a4a4a 0 16%,transparent 17%),#1c1c1c" }
+        }
+      ]
+    },
+    {
+      "name": "Shift Plate Style",
+      "values": [
+        {
+          "name": "Carbon Weave",
+          "sets": [{ "slot": "plate", "finish": "carbonWeave" }],
+          "swatch": { "css": "repeating-conic-gradient(#181818 0 25%,#3d3d3d 0 50%) 0 0/4px 4px" }
+        },
+        {
+          "name": "Forged Carbon",
+          "sets": [{ "slot": "plate", "finish": "forgedCarbon" }],
+          "swatch": { "css": "radial-gradient(circle at 30% 30%,#5a5a5a 0 13%,transparent 14%),radial-gradient(circle at 70% 58%,#4a4a4a 0 16%,transparent 17%),#1c1c1c" }
+        },
+        {
+          "name": "Anodized Grey Aluminium",
+          "sets": [{ "slot": "plate", "finish": "anodizedGrey" }],
+          "swatch": { "css": "linear-gradient(135deg,#a3a6ab,#6f7378)" }
+        }
+      ]
+    },
+    {
+      "name": "Shift Pattern",
+      "values": [
+        {
+          "name": "6+R Down",
+          "sets": [{ "slot": "plate", "model": "plate-6r-down" }, { "slot": "grommet", "model": "grommet-6r-down" }]
+        },
+        {
+          "name": "6+R Up",
+          "sets": [{ "slot": "plate", "model": "plate-6r-up" }, { "slot": "grommet", "model": "grommet-6r-up" }]
+        },
+        {
+          "name": "7+R",
+          "sets": [{ "slot": "plate", "model": "plate-7r" }, { "slot": "grommet", "model": "grommet-7r" }]
+        }
+      ]
+    }
+  ],
+  "defaultSelection": {
+    "Shift Knob": "Carbon Weave | Round",
+    "Shift Plate Style": "Carbon Weave",
+    "Shift Pattern": "6+R Down"
+  },
+  "framing": { "azimuthDeg": 35, "polarDeg": 71, "maxPolarDeg": 83, "minZoom": 0.35, "maxZoom": 1.6, "fovDeg": 30 }
+}

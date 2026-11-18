@@ -1,0 +1,14 @@
+{
+  "version": "9327d853bdd2",
+  "brotliBytes": {
+    "knob-round": 42650,
+    "knob-senna": 65263,
+    "plate-6r-down": 23076,
+    "plate-6r-up": 23136,
+    "plate-7r": 23258,
+    "grommet-6r-down": 10822,
+    "grommet-6r-up": 10817,
+    "grommet-7r": 11306
+  },
+  "totalBrotliBytes": 210328
+}

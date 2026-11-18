@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Still capture</title>
+  <style>
+    html, body { margin: 0; background: transparent; }
+    mini3d-viewer { display: block; width: 1000px; height: 1000px; }
+  </style>
+</head>
+<body>
+  <!-- One viewer at 1000 × 1000 CSS px; the product comes from ?product=<id>. Used by `npm run stills`. -->
+  <mini3d-viewer id="viewer"></mini3d-viewer>
+  <script type="module">
+    import '../viewer/element.ts';
+    document.getElementById('viewer').setAttribute('product', new URLSearchParams(location.search).get('product') ?? '');
+  </script>
+</body>
+</html>

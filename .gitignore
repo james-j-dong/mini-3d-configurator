@@ -1,0 +1,9 @@
+node_modules/
+assets/source/
+public/bundles/
+public/products/
+dist/
+test-results/
+playwright-report/
+.wrangler/
+.superpowers/
