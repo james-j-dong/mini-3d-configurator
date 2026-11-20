@@ -18,12 +18,23 @@ export interface SpeedTestResult {
   slowSwaps: string[];
 }
 
-export interface DebugInfo { programs: number; textures: number; level: QualityLevel; renderPath: 'worker' | 'main' }
+export interface DebugInfo {
+  programs: number;
+  textures: number;
+  level: QualityLevel;
+  renderPath: 'worker' | 'main';
+  /** The display's measured refresh interval; null until the viewer has had an idle moment to measure it. */
+  displayMs: number | null;
+  /** The camera's angle around the product; null before the product has loaded. */
+  azimuthRad: number | null;
+}
 
 export type ToEngine =
   | { type: 'init'; productUrl: string; selection: Selection | null; widthCss: number; heightCss: number; dpr: number; stats: boolean; canvas?: OffscreenCanvas }
   | { type: 'resize'; widthCss: number; heightCss: number; dpr: number }
-  | { type: 'pointer'; kind: 'down' | 'move' | 'up' | 'cancel'; id: number; x: number; y: number } // CSS px within the box
+  // x and y are CSS px within the box. tMs is the pointer event's own timeStamp: when it happened, not when
+  // the engine got round to it. It is only ever compared with other pointer messages' tMs.
+  | { type: 'pointer'; kind: 'down' | 'move' | 'up' | 'cancel'; id: number; x: number; y: number; tMs: number }
   | { type: 'wheel'; deltaY: number; x: number; y: number }
   | { type: 'configure'; selection: Selection }
   | { type: 'visible'; visible: boolean }

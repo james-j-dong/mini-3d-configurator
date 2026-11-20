@@ -5,6 +5,17 @@
 // It deliberately imports nothing from the viewer: a module shared with the hashed chunks would be
 // bundled into this unhashed file, and an old chunk could then import from a newer loader.js after
 // a deploy. So the pointer-file lookup below mirrors products.ts in a few lines.
+//
+// The built file must also have no static import at all. It is cached apart from the hashed
+// chunks, so a static import of one would cost a round trip before the still shows, and would
+// stop this file running altogether once a deploy renames that chunk.
+
+/**
+ * The module that defines <mini3d-viewer>, relative to this file. The build swaps in the built
+ * chunk's hashed file name (see vite.config.ts). A plain `import('./element.ts')` would have Vite
+ * wrap the call in its preload helper, which lives in a hashed chunk this file would then import.
+ */
+const VIEWER_MODULE: string = './element.ts';
 
 const ORIGIN: string = new URL(import.meta.url).origin;
 const prepared: WeakSet<Element> = new WeakSet();
@@ -12,7 +23,7 @@ const prepared: WeakSet<Element> = new WeakSet();
 const nearScreen: IntersectionObserver = new IntersectionObserver(entries => {
   if (!entries.some(e => e.isIntersecting)) return;
   nearScreen.disconnect();
-  import('./element.ts') // defines <mini3d-viewer>; existing elements upgrade
+  import(/* @vite-ignore */ new URL(VIEWER_MODULE, import.meta.url).href) // existing elements upgrade
     .catch(loadCurrentLoader);
 }, { rootMargin: '200px' });
 

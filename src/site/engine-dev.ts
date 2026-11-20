@@ -51,7 +51,7 @@ const engine = new Engine(canvas, (m: FromEngine) => {
 const pointer = (kind: 'down' | 'move' | 'up' | 'cancel') => (e: PointerEvent): void => {
   if (kind === 'down') canvas.setPointerCapture(e.pointerId);
   const box = canvas.getBoundingClientRect();
-  engine.handle({ type: 'pointer', kind, id: e.pointerId, x: e.clientX - box.left, y: e.clientY - box.top });
+  engine.handle({ type: 'pointer', kind, id: e.pointerId, x: e.clientX - box.left, y: e.clientY - box.top, tMs: e.timeStamp });
 };
 canvas.addEventListener('pointerdown', pointer('down'));
 canvas.addEventListener('pointermove', pointer('move'));

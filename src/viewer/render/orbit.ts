@@ -6,8 +6,15 @@ import type { Framing } from '../../schema/product.ts';
 const FRAME_MS: number = 16.7;
 const COAST_DECAY_PER_FRAME: number = 0.08;
 const COAST_STOP_RAD_PER_FRAME: number = 0.0005;
+/** The coasting speed is the drag's pace over this long before the last move. */
+const PACE_WINDOW_MS: number = 80;
+/** A release this long after the last move is a still finger: no coasting. */
+const RELEASE_STILL_MS: number = 60;
 const MIN_POLAR_RAD: number = MathUtils.degToRad(5);
 const WORLD_UP: Vector3 = new Vector3(0, 1, 0);
+
+/** Where a drag had got to at one moment: the angles dragged since the touch, before any clamping. */
+interface DragPoint { tMs: number; az: number; polar: number }
 
 /**
  * Distance at which the box's bounding sphere fits the view, times `margin`. A sphere keeps the
@@ -32,10 +39,12 @@ export class OrbitController {
   private az: number;
   private pol: number;
   private dist: number = 1;
-  /** Radians per 16.7 ms frame, from the latest drag. */
+  /** Radians per 16.7 ms frame, set on release. */
   private velocityAz: number = 0;
   private velocityPolar: number = 0;
   private coasting: boolean = false;
+  /** The current drag's recent points, oldest first: the last 80 ms and one point before that. */
+  private dragPoints: DragPoint[] = [];
 
   constructor(framing: Framing) {
     this.framing = framing;
@@ -58,31 +67,57 @@ export class OrbitController {
     this.dist = this.fitDist;
   }
 
+  /** A pointer went down at `tMs`: stops any coasting and starts a new drag from here. */
+  grab(tMs: number): void {
+    this.hold();
+    this.dragPoints.push({ tMs, az: 0, polar: 0 });
+  }
+
   /**
-   * Turns the camera by 2π per box height dragged. `dtMs` is the time since the previous drag
-   * event; it scales the coasting velocity so coasting speed doesn't depend on the input rate.
+   * Turns the camera by 2π per box height dragged. `tMs` is when the move happened, on the same
+   * clock as grab() and release() (the pointer events' own timestamps).
    */
-  drag(dxPx: number, dyPx: number, boxHeightPx: number, dtMs: number = FRAME_MS): void {
+  drag(dxPx: number, dyPx: number, boxHeightPx: number, tMs: number): void {
     const dAz: number = (-2 * Math.PI * dxPx) / boxHeightPx;
     const dPolar: number = (-2 * Math.PI * dyPx) / boxHeightPx;
     this.coasting = false;
     this.az += dAz;
     this.pol = MathUtils.clamp(this.pol + dPolar, MIN_POLAR_RAD, this.maxPolar);
-    const perFrame: number = FRAME_MS / Math.max(dtMs, 1);
-    this.velocityAz = dAz * perFrame;
-    this.velocityPolar = dPolar * perFrame;
+
+    const points: DragPoint[] = this.dragPoints;
+    const last: DragPoint | undefined = points[points.length - 1];
+    points.push({ tMs, az: (last?.az ?? 0) + dAz, polar: (last?.polar ?? 0) + dPolar });
+    while (points.length > 2 && points[1].tMs < tMs - PACE_WINDOW_MS) points.shift();
   }
 
-  /** Starts coasting with the latest drag velocity. */
-  release(): void {
+  /**
+   * The pointer lifted at `tMs`: coasts at the drag's pace over its last 80 ms. One move's own gap
+   * is not enough to go by: two moves delivered together would read as a very fast flick. A pace is
+   * never judged over less than one frame, and a finger that rested before lifting doesn't coast.
+   */
+  release(tMs: number): void {
+    const points: DragPoint[] = this.dragPoints;
+    this.dragPoints = [];
+    this.velocityAz = 0;
+    this.velocityPolar = 0;
+    this.coasting = false;
+    const last: DragPoint | undefined = points[points.length - 1];
+    if (points.length < 2 || !last || tMs - last.tMs > RELEASE_STILL_MS) return;
+
+    // points[0] may be the one point kept from before the window; skip it when a later one will do.
+    const from: DragPoint = points.length > 2 && points[0].tMs < last.tMs - PACE_WINDOW_MS ? points[1] : points[0];
+    const framesSpanned: number = Math.max(last.tMs - from.tMs, FRAME_MS) / FRAME_MS;
+    this.velocityAz = (last.az - from.az) / framesSpanned;
+    this.velocityPolar = (last.polar - from.polar) / framesSpanned;
     this.coasting = Math.max(Math.abs(this.velocityAz), Math.abs(this.velocityPolar)) >= COAST_STOP_RAD_PER_FRAME;
   }
 
-  /** Stops any coasting at once (a new touch, for example). */
+  /** Stops any coasting at once and forgets the drag so far. */
   hold(): void {
     this.coasting = false;
     this.velocityAz = 0;
     this.velocityPolar = 0;
+    this.dragPoints = [];
   }
 
   /** Zooms by `factor` (>1 zooms in) towards the point under the cursor (NDC). */

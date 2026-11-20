@@ -53,8 +53,9 @@ async function waitFor(page: Page, name: string, timeout: number = 30_000): Prom
 const pick = (page: Page, option: string, value: string): Promise<void> =>
   page.locator(`button[data-option="${option}"][data-value="${value}"]`).click();
 
-const debugInfo = (page: Page): Promise<{ programs: number; textures: number; renderPath: string }> =>
-  page.evaluate(() => (document.querySelector('mini3d-viewer') as unknown as { debugInfo(): Promise<{ programs: number; textures: number; renderPath: string }> }).debugInfo());
+interface DebugInfo { programs: number; textures: number; renderPath: string; level: { tier: string; dprCap: number }; displayMs: number | null; azimuthRad: number | null }
+const debugInfo = (page: Page): Promise<DebugInfo> =>
+  page.evaluate(() => (document.querySelector('mini3d-viewer') as unknown as { debugInfo(): Promise<DebugInfo> }).debugInfo());
 
 const configuration = (page: Page): Promise<Selection> =>
   page.evaluate(() => (document.querySelector('mini3d-viewer') as unknown as { configuration: Record<string, string> }).configuration);
@@ -268,4 +269,115 @@ test('a loader.js cached from before a deploy still brings up the viewer', async
   });
   await page.goto('/');
   await waitFor(page, 'ready');
+});
+
+test('measures the display refresh interval once the viewer is idle', async ({ page }) => {
+  await page.goto('/?stats'); await waitFor(page, 'ready');
+  await expect.poll(async () => (await debugInfo(page)).displayMs ?? 0, { timeout: 15_000 }).toBeGreaterThan(0);
+  const displayMs: number = (await debugInfo(page)).displayMs!;
+  expect(displayMs).toBeGreaterThan(12); // the test browsers refresh at 60 Hz: 16.7 ms
+  expect(displayMs).toBeLessThan(22);
+});
+
+test('a display capped at 30 fps keeps full quality while spinning', async ({ page, browserName }) => {
+  // Headless Chromium's software renderer needs 25-45 ms a frame for this scene, so under a 30 fps
+  // cap it really does miss refreshes and stepping down is correct there. Firefox renders it in time.
+  test.skip(browserName !== 'firefox', 'needs a renderer that draws a frame well inside 33 ms');
+  // Animation callbacks at most every 30 ms, as iOS does in Low Power Mode. The main-thread path, so
+  // the page's requestAnimationFrame is the one the engine uses. A small viewer keeps rendering cheap.
+  await page.setViewportSize({ width: 780, height: 160 });
+  await page.addInitScript(() => {
+    const raf: (callback: FrameRequestCallback) => number = window.requestAnimationFrame.bind(window);
+    let waiting: FrameRequestCallback[] = [];
+    let last: number = -Infinity;
+    const loop = (t: number): void => {
+      if (t - last >= 30 && waiting.length > 0) {
+        last = t;
+        const run: FrameRequestCallback[] = waiting;
+        waiting = [];
+        for (const callback of run) callback(t);
+      }
+      raf(loop);
+    };
+    raf(loop);
+    window.requestAnimationFrame = (callback: FrameRequestCallback): number => { waiting.push(callback); return 0; };
+  });
+  await page.goto('/?stats&render=main'); await waitFor(page, 'ready');
+  await waitForBackgroundLoad(page);
+  await expect.poll(async () => (await debugInfo(page)).displayMs ?? 0, { timeout: 15_000 }).toBeGreaterThan(28);
+
+  // The speed test draws every frame for 6 s: three full windows of 60 frames at 30 fps.
+  const result: { frames: number; p50Ms: number } = await page.evaluate(() =>
+    (document.querySelector('mini3d-viewer') as unknown as { runSpeedTest(): Promise<{ frames: number; p50Ms: number }> }).runSpeedTest());
+  expect(result.p50Ms).toBeGreaterThan(28); // the cap held: this was a 30 fps run
+  expect((await debugInfo(page)).level).toEqual({ tier: 'full', dprCap: 1.5 });
+});
+
+test('a flick keeps the model turning after release; a drag that rests first does not', async ({ page }) => {
+  await page.goto('/?stats'); await waitFor(page, 'ready');
+  const azimuth = async (): Promise<number> => (await debugInfo(page)).azimuthRad!;
+  const box = (await page.locator('mini3d-viewer').boundingBox())!;
+  const x: number = box.x + box.width / 2 - 100;
+  const y: number = box.y + box.height / 2;
+
+  await page.mouse.move(x, y);
+  await page.mouse.down();
+  await page.mouse.move(x + 200, y, { steps: 5 });
+  await page.mouse.up();
+  const afterFlick: number = await azimuth();
+  await page.waitForTimeout(400);
+  expect(Math.abs((await azimuth()) - afterFlick)).toBeGreaterThan(0.01); // still turning
+
+  await page.waitForTimeout(2500); // let the coasting die out
+  await page.mouse.move(x, y);
+  await page.mouse.down();
+  await page.mouse.move(x + 200, y, { steps: 5 });
+  await page.waitForTimeout(300); // the pointer rests before it lifts
+  await page.mouse.up();
+  const afterRest: number = await azimuth();
+  await page.waitForTimeout(400);
+  expect(await azimuth()).toBe(afterRest); // stopped where it was left
+});
+
+/** A page that embeds the viewer the way a store page does: the element and loader.js, nothing else. */
+async function gotoEmbedPage(page: Page): Promise<void> {
+  await page.route('**/embed.html', route => route.fulfill({
+    contentType: 'text/html',
+    body: '<!doctype html><title>embed</title><mini3d-viewer product="ob1" style="display:block;width:600px;height:400px"></mini3d-viewer>'
+      + '<script type="module" src="/v1/loader.js"></script>',
+  }));
+  await page.goto('/embed.html', { waitUntil: 'commit' }); // not 'load': a test may be holding the page's scripts back
+}
+
+test('loader.js shows the still on its own, before any hashed file has loaded', async ({ page }) => {
+  const release: () => void = await holdRequests(page, /\/v1\/assets\//);
+  await gotoEmbedPage(page);
+  await expect(page.locator('mini3d-viewer[data-loader-still]')).toBeAttached({ timeout: 10_000 });
+  release();
+  await waitFor(page, 'ready'); // and the viewer still comes up once the hashed files arrive
+});
+
+test('loader.js has no static import', async ({ request }) => {
+  // A static import of a hashed chunk would break a cached loader.js after a deploy that renames the chunk.
+  const code: string = await (await request.get('/v1/loader.js')).text();
+  expect(code).not.toMatch(/\bimport\s*(?:[\w$*{]|["'`])/);
+  expect(code).toMatch(/element-[\w-]+\.js/); // it still names the viewer chunk
+});
+
+test('a speed test asked for before the after-first-view parts are shown waits for them', async ({ page }) => {
+  const release = await holdRequests(page, AFTER_FIRST_VIEW);
+  await page.goto('/?stats'); await waitFor(page, 'ready');
+  const before: number = (await debugInfo(page)).azimuthRad!;
+  await page.evaluate(() => {
+    const viewer = document.querySelector('mini3d-viewer') as unknown as { runSpeedTest(): Promise<{ frames: number }> };
+    (window as unknown as { __speedTest: Promise<{ frames: number }> }).__speedTest = viewer.runSpeedTest();
+  });
+  await page.waitForTimeout(700);
+  expect((await debugInfo(page)).azimuthRad).toBe(before); // the speed test spins the model: it has not started
+  release();
+  const result: { frames: number } = await page.evaluate(() => (window as unknown as { __speedTest: Promise<{ frames: number }> }).__speedTest);
+  expect(result.frames).toBeGreaterThan(30);
+  // It could only have run after every after-first-view part was on screen.
+  expect(await page.evaluate(() => (window as unknown as { __events: ViewerEvent[] }).__events
+    .some(e => e.name === 'progress' && e.detail.phase === 'deferred' && e.detail.loaded === e.detail.total && (e.detail.total as number) > 0))).toBe(true);
 });

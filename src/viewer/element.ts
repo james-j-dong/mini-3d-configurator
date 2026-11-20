@@ -360,7 +360,7 @@ export class Mini3dViewer extends HTMLElement {
         this.hint.classList.add('gone');
       }
       const rect: DOMRect = this.dragRect ?? box.getBoundingClientRect();
-      this.send({ type: 'pointer', kind, id: e.pointerId, x: e.clientX - rect.left, y: e.clientY - rect.top });
+      this.send({ type: 'pointer', kind, id: e.pointerId, x: e.clientX - rect.left, y: e.clientY - rect.top, tMs: e.timeStamp });
     };
     box.addEventListener('pointerdown', pointer('down'));
     box.addEventListener('pointermove', e => { if (box.hasPointerCapture(e.pointerId)) pointer('move')(e); });

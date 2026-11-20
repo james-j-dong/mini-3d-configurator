@@ -16,7 +16,7 @@ import { makeFinishTextures, type FinishTextures } from './textures.ts';
 import { createMaterials, type QualityTier } from './materials.ts';
 import { createStudio, ENVIRONMENT_INTENSITY, shadowPlacement, type Studio } from './studio.ts';
 import { deferredModelsOf, LoadPlanner, requiredModelsOf, SwapScheduler, type PartState, type SwapStep } from './scheduler.ts';
-import { FrameIntervals, QualityGovernor } from './governor.ts';
+import { DisplayInterval, FrameIntervals, QualityGovernor } from './governor.ts';
 import { warmDraw, warmUp } from './warmup.ts';
 
 type RenderCanvas = HTMLCanvasElement | OffscreenCanvas;
@@ -51,8 +51,6 @@ const SLOW_FRAME_MS: number = 33.4;
 const SPEED_TEST_MS: number = 6000;
 const SPEED_TEST_SWAP_EVERY_MS: number = 500;
 const SPEED_TEST_TURN_RAD_PER_FRAME: number = 0.02;
-/** A release this long after the last move is a still finger: no coasting. */
-const RELEASE_STILL_MS: number = 60;
 const WHEEL_ZOOM_PER_PIXEL: number = 0.002;
 const MAX_STEP_MS: number = 100;
 const WEBP_QUALITY: number = 0.8;
@@ -136,12 +134,16 @@ export class Engine {
   private tickQueued: boolean = false;
   private lastTickMs: number = 0;
   private readonly frameIntervals: FrameIntervals = new FrameIntervals();
+  private readonly displayInterval: DisplayInterval = new DisplayInterval();
+  /** This tick paid a part's one-off first-draw cost, so the time to the next frame says nothing about render load. */
+  private warmedThisTick: boolean = false;
 
   private readonly pointers: Map<number, { x: number; y: number }> = new Map();
-  private lastMoveMs: number = 0;
   private pinchDistance: number = 0;
 
   private speedTest: SpeedTestRun | null = null;
+  /** A speed test was asked for; it starts once the after-first-view parts are on screen, so it times the whole product. */
+  private speedTestWaitingId: number | null = null;
   private statsOn: boolean = false;
   private readonly recentFrameMs: number[] = [];
   private initMs: number = 0;
@@ -157,7 +159,7 @@ export class Engine {
     switch (m.type) {
       case 'init': void this.init(m); break;
       case 'resize': this.resize(m.widthCss, m.heightCss, m.dpr); break;
-      case 'pointer': this.onPointer(m.kind, m.id, m.x, m.y); break;
+      case 'pointer': this.onPointer(m.kind, m.id, m.x, m.y, m.tMs); break;
       case 'wheel': this.onWheel(m.deltaY, m.x, m.y); break;
       case 'configure': this.request(m.selection, true); break;
       case 'visible': this.setVisible(m.visible); break;
@@ -249,6 +251,7 @@ export class Engine {
     if (this.statsOn) setInterval(() => this.emitStats(), 1000);
     if (this.scheduler.pending) this.request(this.scheduler.pending, this.emitOnApply);
     void this.backgroundLoad();
+    this.requestTick(); // nothing to draw yet: these first ticks time the display's refresh interval
   }
 
   /** Textures and both material tiers. */
@@ -360,10 +363,11 @@ export class Engine {
     }
   }
 
-  /** An after-first-view part failed twice: report it; nothing waits for it, so nothing else changes. */
+  /** An after-first-view part failed twice: report it; no pick waits for it. */
   private reportDeferredFailure(id: string): void {
     this.emit({ type: 'error', reason: `model-load-failed: ${id}`, fatal: false });
     this.emitDeferredProgress();
+    this.requestTick(); // a waiting speed test may start now
   }
 
   /** `loaded` counts the current configuration's after-first-view models that are shown or failed. */
@@ -371,6 +375,11 @@ export class Engine {
     const deferred: string[] = deferredModelsOf(this.product!, this.current);
     const loaded: number = deferred.filter(id => this.shownDeferred.has(id) || this.models.get(id)!.status === 'failed').length;
     this.emit({ type: 'progress', loaded, total: deferred.length, phase: 'deferred' });
+  }
+
+  /** Every after-first-view part of the current configuration is shown or has failed: nothing more will appear. */
+  private deferredSettled(): boolean {
+    return deferredModelsOf(this.product!, this.current).every(id => this.shownDeferred.has(id) || this.models.get(id)!.status === 'failed');
   }
 
   /** Some after-first-view part of the current configuration is loaded and warmed but not shown yet. */
@@ -472,6 +481,7 @@ export class Engine {
     this.tickQueued = false;
     if (!this.visible || this.contextLost || !this.ready) {
       this.frameIntervals.reset();
+      this.displayInterval.reset();
       return;
     }
     const stepMs: number = Math.min(MAX_STEP_MS, this.lastTickMs ? t - this.lastTickMs : 16.7);
@@ -479,6 +489,7 @@ export class Engine {
 
     let draw: boolean = this.dirty;
     this.dirty = false;
+    this.warmedThisTick = false;
     if (this.orbit!.step(stepMs)) draw = true;
     if (this.speedTest) {
       this.speedTestTick(t);
@@ -503,11 +514,16 @@ export class Engine {
 
     if (draw) this.render();
     if (revealed) this.emitDeferredProgress();
+    this.startWaitingSpeedTest();
     const continues: boolean = this.pointers.size > 0 || this.orbit!.isCoasting || this.speedTest !== null || this.dirty
       || this.warmQueue.length > 0 || this.revealPending;
-    const interval: number | null = this.frameIntervals.tick(t, draw, continues);
+    // A warm-up's cost lands in the gap to the next frame; lower quality wouldn't shrink it, so that gap isn't timed.
+    const interval: number | null = this.frameIntervals.tick(t, draw, continues && !this.warmedThisTick);
     if (interval !== null) this.recordFrame(interval, t);
-    if (continues) this.requestTick();
+    // Once drawing stops, a few more ticks that draw nothing time the display's own refresh interval.
+    this.displayInterval.tick(t, draw);
+    this.governor.displayMs = this.displayInterval.estimateMs ?? this.governor.displayMs;
+    if (continues || this.displayInterval.wantsTick) this.requestTick();
   };
 
   private render(): void {
@@ -521,6 +537,7 @@ export class Engine {
     const geometry: BufferGeometry | undefined = state?.geometry;
     if (!state || !geometry || state.warmed) return;
     state.warmed = true;
+    this.warmedThisTick = true;
     const meshes: Mesh[] = this.allMaterials().map(m => {
       const mesh: Mesh = new Mesh(geometry, m);
       mesh.frustumCulled = false;
@@ -568,6 +585,7 @@ export class Engine {
   private setVisible(visible: boolean): void {
     this.visible = visible;
     this.frameIntervals.reset();
+    this.displayInterval.reset();
     if (visible) {
       this.dirty = true;
       this.requestTick();
@@ -576,13 +594,12 @@ export class Engine {
 
   // ---------- input ----------
 
-  private onPointer(kind: 'down' | 'move' | 'up' | 'cancel', id: number, x: number, y: number): void {
+  /** `tMs` is the pointer event's own time (the page's clock, not this thread's): only compare it with other events'. */
+  private onPointer(kind: 'down' | 'move' | 'up' | 'cancel', id: number, x: number, y: number, tMs: number): void {
     if (!this.orbit) return;
-    const now: number = performance.now();
     if (kind === 'down') {
       this.pointers.set(id, { x, y });
-      this.orbit.hold();
-      this.lastMoveMs = now;
+      this.orbit.grab(tMs);
       if (this.pointers.size === 2) this.pinchDistance = this.currentPinchDistance();
       this.requestTick();
       return;
@@ -592,7 +609,7 @@ export class Engine {
       if (!previous) return;
       this.pointers.set(id, { x, y });
       if (this.pointers.size === 1) {
-        this.orbit.drag(x - previous.x, y - previous.y, this.heightCss, now - this.lastMoveMs);
+        this.orbit.drag(x - previous.x, y - previous.y, this.heightCss, tMs);
       } else if (this.pointers.size === 2) {
         const distance: number = this.currentPinchDistance();
         if (this.pinchDistance > 0 && distance > 0) {
@@ -601,19 +618,14 @@ export class Engine {
         }
         this.pinchDistance = distance;
       }
-      this.lastMoveMs = now;
       this.dirty = true;
       this.requestTick();
       return;
     }
     // up or cancel
     if (!this.pointers.delete(id)) return;
-    if (this.pointers.size === 0) {
-      if (now - this.lastMoveMs > RELEASE_STILL_MS) this.orbit.drag(0, 0, this.heightCss);
-      this.orbit.release();
-    } else {
-      this.orbit.hold();
-    }
+    if (this.pointers.size === 0) this.orbit.release(tMs);
+    else this.orbit.grab(tMs); // one finger of a pinch lifted: the other starts a new drag from here
     this.requestTick();
   }
 
@@ -664,13 +676,24 @@ export class Engine {
   }
 
   private startSpeedTest(id: number): void {
-    if (!this.ready || this.speedTest) return;
+    if (!this.ready || this.speedTest || this.speedTestWaitingId !== null) return;
+    this.speedTestWaitingId = id;
+    this.requestTick();
+  }
+
+  /**
+   * Starts the speed test that was asked for, once the after-first-view parts are on screen. They
+   * only appear on idle frames and the test draws every frame, so started sooner it would run
+   * without them and time a lighter scene than visitors see.
+   */
+  private startWaitingSpeedTest(): void {
+    if (this.speedTestWaitingId === null || !this.deferredSettled()) return;
     this.speedTest = {
-      id, startMs: 0, lastMs: 0, deltas: [], swapFrames: [], labels: [], nextSwapMs: SPEED_TEST_SWAP_EVERY_MS, swaps: 0,
+      id: this.speedTestWaitingId, startMs: 0, lastMs: 0, deltas: [], swapFrames: [], labels: [], nextSwapMs: SPEED_TEST_SWAP_EVERY_MS, swaps: 0,
       selection: { ...this.current }, original: { ...this.current },
     };
+    this.speedTestWaitingId = null;
     this.orbit!.hold();
-    this.requestTick();
   }
 
   /** 6 s of spinning, with a swap through the options every 500 ms (knob, plate style, pattern in turn). */
@@ -682,7 +705,7 @@ export class Engine {
     }
     run.deltas.push(t - run.lastMs);
     run.lastMs = t;
-    this.orbit!.drag((-SPEED_TEST_TURN_RAD_PER_FRAME * this.heightCss) / (2 * Math.PI), 0, this.heightCss);
+    this.orbit!.drag((-SPEED_TEST_TURN_RAD_PER_FRAME * this.heightCss) / (2 * Math.PI), 0, this.heightCss, t);
     this.orbit!.hold();
     const elapsed: number = t - run.startMs;
     if (elapsed > run.nextSwapMs) {
@@ -726,6 +749,8 @@ export class Engine {
       textures: r?.info.memory.textures ?? 0,
       level: this.governor.level,
       renderPath: this.renderPath,
+      displayMs: this.displayInterval.estimateMs,
+      azimuthRad: this.orbit?.azimuth ?? null,
     };
   }
 
@@ -745,11 +770,13 @@ export class Engine {
       .filter(e => e.name.includes('.glb'))
       .reduce((sum, e) => sum + (e.encodedBodySize || e.decodedBodySize || 0), 0);
     const level: QualityLevel = this.governor.level;
+    const displayMs: number | null = this.displayInterval.estimateMs;
     this.emit({
       type: 'stats',
       text: [
         `gpu        ${this.gpuName()}`,
         `render     ${this.renderPath} thread · ${level.tier} tier · dpr cap ${level.dprCap}`,
+        `display    ${displayMs === null ? 'not measured yet' : `${displayMs.toFixed(1)} ms between refreshes (${(1000 / displayMs).toFixed(0)} Hz)`}`,
         `canvas     ${size.x}×${size.y} px (${r.getPixelRatio()}× of ${this.dpr})`,
         `draws      ${r.info.render.calls} · ${r.info.render.triangles.toLocaleString()} triangles`,
         `frames     ${frames.length ? `${frames.length} back-to-back last second, avg ${avg.toFixed(1)} ms, max ${Math.max(...frames).toFixed(1)} ms` : 'idle'}`,
@@ -791,6 +818,7 @@ export class Engine {
       await this.warmAll();
       this.render();
       this.frameIntervals.reset();
+      this.displayInterval.reset();
       this.emit({ type: 'restored' });
       // The re-warm may have warmed after-first-view parts that were still hidden.
       if (this.deferredAwaitingReveal()) {
