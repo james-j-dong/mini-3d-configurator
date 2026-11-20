@@ -14,8 +14,8 @@ import { resolveAssembly } from './assembly.ts';
 import { OrbitController } from './orbit.ts';
 import { makeFinishTextures, type FinishTextures } from './textures.ts';
 import { createMaterials, type QualityTier } from './materials.ts';
-import { createStudio, ENVIRONMENT_INTENSITY, type Studio } from './studio.ts';
-import { convertedModelsOf, LoadPlanner, SwapScheduler, type PartState, type SwapStep } from './scheduler.ts';
+import { createStudio, ENVIRONMENT_INTENSITY, shadowPlacement, type Studio } from './studio.ts';
+import { deferredModelsOf, LoadPlanner, requiredModelsOf, SwapScheduler, type PartState, type SwapStep } from './scheduler.ts';
 import { FrameIntervals, QualityGovernor } from './governor.ts';
 import { warmDraw, warmUp } from './warmup.ts';
 
@@ -56,6 +56,8 @@ const RELEASE_STILL_MS: number = 60;
 const WHEEL_ZOOM_PER_PIXEL: number = 0.002;
 const MAX_STEP_MS: number = 100;
 const WEBP_QUALITY: number = 0.8;
+/** After-first-view slots draw after the outside parts, so the depth test rejects their hidden pixels cheaply. */
+const AFTER_FIRST_VIEW_RENDER_ORDER: number = 1;
 /** The attributes Three.js would request itself for { antialias, alpha, powerPreference }. */
 const CONTEXT_ATTRIBUTES: WebGLContextAttributes = {
   alpha: true, depth: true, stencil: false, antialias: true, premultipliedAlpha: true,
@@ -118,6 +120,10 @@ export class Engine {
   private current: Selection = {};
   private emitOnApply: boolean = true;
   private warmQueue: string[] = [];
+  /** After-first-view models currently drawn by a slot. */
+  private shownDeferred: Set<string> = new Set();
+  /** An after-first-view part was warmed: show it on the next frame, never the frame that warmed it. */
+  private revealPending: boolean = false;
 
   private widthCss: number = 0;
   private heightCss: number = 0;
@@ -202,7 +208,7 @@ export class Engine {
     }
     this.product = product;
     this.emit({ type: 'product', product });
-    this.scheduler = new SwapScheduler(s => convertedModelsOf(product, s));
+    this.scheduler = new SwapScheduler(s => requiredModelsOf(product, s));
     this.orbit = new OrbitController(product.framing);
     for (const id of Object.keys(product.models)) this.models.set(id, { status: 'idle', warmed: false, local: new Matrix4() });
 
@@ -213,8 +219,8 @@ export class Engine {
       this.emit({ type: 'error', reason: 'invalid-selection: initial', fatal: false });
     }
 
-    // The current configuration's parts first.
-    const currentModels: string[] = convertedModelsOf(product, selection);
+    // The current configuration's parts first; after-first-view parts load once it's on screen.
+    const currentModels: string[] = requiredModelsOf(product, selection);
     let loaded: number = 0;
     this.emit({ type: 'progress', loaded, total: currentModels.length, phase: 'current' });
     await Promise.all(currentModels.map(async id => {
@@ -227,37 +233,38 @@ export class Engine {
       return;
     }
 
-    this.buildLook(renderer, product);
+    this.buildLook(product);
     this.buildSlots(product);
     this.applyConfiguration(selection);
     this.orbit.fit(this.widthCss, this.heightCss, this.bounds);
     this.orbit.apply(this.camera);
+    this.installStudio(renderer); // sized from the shown parts; before the warm-up, so the shadow's shader is compiled in it
     await this.warmAll();
     if (this.contextLost) return;
     this.render();
     this.ready = true;
     this.firstViewMs = performance.now() - this.initMs;
     this.emit({ type: 'ready' });
+    this.emitDeferredProgress();
     if (this.statsOn) setInterval(() => this.emitStats(), 1000);
     if (this.scheduler.pending) this.request(this.scheduler.pending, this.emitOnApply);
     void this.backgroundLoad();
   }
 
-  /** Textures, both material tiers, and the studio. */
-  private buildLook(renderer: WebGLRenderer, product: Product): void {
+  /** Textures and both material tiers. */
+  private buildLook(product: Product): void {
     this.textures = makeFinishTextures();
     this.materials = { full: createMaterials(product, this.textures, 'full'), lean: createMaterials(product, this.textures, 'lean') };
-    this.installStudio(renderer, product);
   }
 
-  private installStudio(renderer: WebGLRenderer, product: Product): void {
+  /** The environment, key light and contact shadow, the shadow sized and placed from the shown parts' bounds. */
+  private installStudio(renderer: WebGLRenderer): void {
     if (this.studio) {
       this.scene.remove(this.studio.shadow, this.studio.keyLight);
       this.studio.environment.dispose();
     }
-    const root: ModelDef = product.models[product.slots.find(s => s.parent === undefined)!.model];
-    const footprint: number = root.kind === 'box' ? Math.max(root.sizeMm[0], root.sizeMm[2]) * METRES_PER_MM : 0.1;
-    this.studio = createStudio(renderer, footprint);
+    const { footprintM, floorYM } = shadowPlacement(this.bounds);
+    this.studio = createStudio(renderer, footprintM, floorYM);
     this.scene.environment = this.studio.environment;
     this.scene.environmentIntensity = ENVIRONMENT_INTENSITY;
     this.scene.add(this.studio.shadow, this.studio.keyLight as DirectionalLight);
@@ -275,6 +282,7 @@ export class Engine {
       const mesh: Mesh = new Mesh();
       mesh.name = slot.id;
       mesh.matrixAutoUpdate = false;
+      if (slot.afterFirstView) mesh.renderOrder = AFTER_FIRST_VIEW_RENDER_ORDER;
       this.slotMeshes.set(slot.id, mesh);
       this.scene.add(mesh);
     }
@@ -344,9 +352,30 @@ export class Engine {
       if (state.status === 'ready' || state.status === 'failed') continue;
       await this.loadModel(id);
       const status: ModelState['status'] = this.models.get(id)!.status;
-      if (status === 'failed') this.failPendingPickIfItNeeds(id);
+      if (status === 'failed') {
+        if (deferredModelsOf(this.product!, this.current).includes(id)) this.reportDeferredFailure(id);
+        else this.failPendingPickIfItNeeds(id);
+      }
       this.emit({ type: 'progress', loaded: settled(), total: order.length, phase: 'background' });
     }
+  }
+
+  /** An after-first-view part failed twice: report it; nothing waits for it, so nothing else changes. */
+  private reportDeferredFailure(id: string): void {
+    this.emit({ type: 'error', reason: `model-load-failed: ${id}`, fatal: false });
+    this.emitDeferredProgress();
+  }
+
+  /** `loaded` counts the current configuration's after-first-view models that are shown or failed. */
+  private emitDeferredProgress(): void {
+    const deferred: string[] = deferredModelsOf(this.product!, this.current);
+    const loaded: number = deferred.filter(id => this.shownDeferred.has(id) || this.models.get(id)!.status === 'failed').length;
+    this.emit({ type: 'progress', loaded, total: deferred.length, phase: 'deferred' });
+  }
+
+  /** Some after-first-view part of the current configuration is loaded and warmed but not shown yet. */
+  private deferredAwaitingReveal(): boolean {
+    return deferredModelsOf(this.product!, this.current).some(id => !this.shownDeferred.has(id) && this.partState(id) === 'warmed');
   }
 
   // ---------- picks ----------
@@ -355,7 +384,7 @@ export class Engine {
     this.scheduler.request(selection);
     this.emitOnApply = emitOnApply;
     if (!this.ready) return;
-    for (const id of convertedModelsOf(this.product!, selection)) {
+    for (const id of requiredModelsOf(this.product!, selection)) {
       const state: ModelState = this.models.get(id)!;
       if (state.status === 'failed') {
         this.failPendingPickIfItNeeds(id);
@@ -374,7 +403,7 @@ export class Engine {
   /** A part the pending pick needs failed twice: drop the pick, report it, and allow a later retry. */
   private failPendingPickIfItNeeds(id: string): void {
     const pending: Selection | null = this.scheduler.pending;
-    if (!pending || !convertedModelsOf(this.product!, pending).includes(id)) return;
+    if (!pending || !requiredModelsOf(this.product!, pending).includes(id)) return;
     this.scheduler.clear();
     this.models.get(id)!.status = 'idle';
     this.emit({ type: 'error', reason: `model-load-failed: ${id}`, fatal: false });
@@ -386,13 +415,20 @@ export class Engine {
     const world: Map<string, Matrix4> = resolveAssembly(product, resolved);
     const tier: QualityTier = this.governor.level.tier;
     this.bounds.makeEmpty();
+    this.shownDeferred = new Set();
     for (const slot of product.slots) {
       const mesh: Mesh = this.slotMeshes.get(slot.id)!;
       const { model, finish } = resolved[slot.id];
       const state: ModelState = this.models.get(model)!;
-      mesh.geometry = state.geometry!;
+      // The finish material is set even on a hidden slot: three compiles hidden meshes' materials too.
       mesh.material = this.materials![tier].get(finish)!;
       mesh.userData.finish = finish;
+      // Required parts are always loaded and warmed by now; an after-first-view part waits until both.
+      const shown: boolean = state.status === 'ready' && (slot.afterFirstView !== true || state.warmed);
+      mesh.visible = shown;
+      if (!shown) continue;
+      if (slot.afterFirstView) this.shownDeferred.add(model);
+      mesh.geometry = state.geometry!;
       mesh.matrix.multiplyMatrices(world.get(slot.id)!, state.local);
       mesh.matrixWorldNeedsUpdate = true;
       this.bounds.union(state.geometry!.boundingBox!.clone().applyMatrix4(mesh.matrix));
@@ -449,15 +485,26 @@ export class Engine {
       draw = true;
     }
     if (this.trySwap()) draw = true;
+    let revealed: boolean = false;
+    if (this.revealPending) {
+      // Warmed on an earlier frame; showing it now costs no first draw.
+      this.revealPending = false;
+      this.applyConfiguration(this.current);
+      revealed = true;
+      draw = true;
+    }
     while (!draw && this.warmQueue.length > 0) {
       const id: string = this.warmQueue.shift()!;
       if (this.models.get(id)!.warmed) continue;
       this.warmOne(id);
+      if (this.deferredAwaitingReveal()) this.revealPending = true;
       draw = true; // the full frame below hides the 1-pixel warm draw
     }
 
     if (draw) this.render();
-    const continues: boolean = this.pointers.size > 0 || this.orbit!.isCoasting || this.speedTest !== null || this.dirty || this.warmQueue.length > 0;
+    if (revealed) this.emitDeferredProgress();
+    const continues: boolean = this.pointers.size > 0 || this.orbit!.isCoasting || this.speedTest !== null || this.dirty
+      || this.warmQueue.length > 0 || this.revealPending;
     const interval: number | null = this.frameIntervals.tick(t, draw, continues);
     if (interval !== null) this.recordFrame(interval, t);
     if (continues) this.requestTick();
@@ -736,7 +783,7 @@ export class Engine {
         this.contextLost = false;
         return;
       }
-      this.installStudio(this.renderer, this.product);
+      this.installStudio(this.renderer);
       for (const texture of this.allTextures()) texture.needsUpdate = true;
       for (const state of this.models.values()) state.warmed = false;
       this.contextLost = false;
@@ -745,6 +792,11 @@ export class Engine {
       this.render();
       this.frameIntervals.reset();
       this.emit({ type: 'restored' });
+      // The re-warm may have warmed after-first-view parts that were still hidden.
+      if (this.deferredAwaitingReveal()) {
+        this.revealPending = true;
+        this.requestTick();
+      }
     })();
   };
 }

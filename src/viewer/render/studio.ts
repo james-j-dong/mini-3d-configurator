@@ -1,6 +1,6 @@
 // A dark, low-key product studio generated in code (no HDR download), plus a soft contact shadow.
 import {
-  BackSide, BoxGeometry, Color, DataTexture, DirectionalLight, DoubleSide, Mesh, MeshBasicMaterial, PlaneGeometry,
+  BackSide, Box3, BoxGeometry, Color, DataTexture, DirectionalLight, DoubleSide, Mesh, MeshBasicMaterial, PlaneGeometry,
   PMREMGenerator, RGBAFormat, Scene, SRGBColorSpace, Vector3, type Texture, type WebGLRenderer,
 } from 'three';
 
@@ -11,6 +11,8 @@ export const ENVIRONMENT_INTENSITY: number = 1.6;
 const SHADOW_SIZE_PX: number = 128;
 const SHADOW_SCALE: number = 2.2;
 const FLOOR_BOUNCE: number = 0.3;
+/** Just above the floor, so the shadow never z-fights the product's underside. */
+const SHADOW_LIFT_M: number = 0.0002;
 
 /** A near-black room with softboxes, like the store's product photos, plus a big reflection card so metals don't read black. */
 function makeStudioScene(): Scene {
@@ -58,11 +60,16 @@ function makeShadowTexture(): Texture {
   return texture;
 }
 
+/** Footprint = the larger of the bounds' x and z sizes; floor = the bounds' lowest y (both in metres). */
+export function shadowPlacement(bounds: Box3): { footprintM: number; floorYM: number } {
+  return { footprintM: Math.max(bounds.max.x - bounds.min.x, bounds.max.z - bounds.min.z), floorYM: bounds.min.y };
+}
+
 /**
  * Builds the environment map (prefiltered once with PMREM), the key light, and a contact shadow
- * quad on the floor (y = 0) sized 2.2 × the body footprint.
+ * quad sized 2.2 × the footprint, just above the floor so the product rests on it.
  */
-export function createStudio(renderer: WebGLRenderer, bodyFootprintM: number): Studio {
+export function createStudio(renderer: WebGLRenderer, footprintM: number, floorYM: number): Studio {
   const pmrem: PMREMGenerator = new PMREMGenerator(renderer);
   const studioScene: Scene = makeStudioScene();
   const environment: Texture = pmrem.fromScene(studioScene, 0.02).texture;
@@ -72,13 +79,13 @@ export function createStudio(renderer: WebGLRenderer, bodyFootprintM: number): S
   const keyLight: DirectionalLight = new DirectionalLight(0xffffff, 0.8);
   keyLight.position.set(-0.4, 0.6, 0.5);
 
-  const size: number = bodyFootprintM * SHADOW_SCALE;
+  const size: number = footprintM * SHADOW_SCALE;
   const shadow: Mesh = new Mesh(
     new PlaneGeometry(size, size),
     new MeshBasicMaterial({ color: 0x000000, map: makeShadowTexture(), transparent: true, depthWrite: false }),
   );
   shadow.rotation.x = -Math.PI / 2;
-  shadow.position.y = 0.0002;
+  shadow.position.y = floorYM + SHADOW_LIFT_M;
   shadow.renderOrder = -1;
   return { environment, shadow, keyLight };
 }

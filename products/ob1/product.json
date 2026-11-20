@@ -1,48 +1,142 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "id": "ob1",
   "name": "OB1 H-Pattern Sim Shifter",
   "sources": {
-    "knob-round": { "file": "assets/source/SHIFT_KNOB_ROUND (M12x1.25)_REV2 (1).STEP", "units": "mm", "upAxis": "y", "bodyCount": 1 },
-    "knob-senna": { "file": "assets/source/SHIFT_KNOB_SENNA (M12x1.25)_REV2 (2).STEP", "units": "mm", "upAxis": "y", "bodyCount": 1 },
-    "plate-6r-down": { "file": "assets/source/OB1-SHPL_6RDOWN_AL_REV5.STEP", "units": "mm", "upAxis": "y", "bodyCount": 2 },
-    "plate-6r-up": { "file": "assets/source/OB1-SHPL_6RUP_AL_REV5.STEP", "units": "mm", "upAxis": "y", "bodyCount": 2 },
-    "plate-7r": { "file": "assets/source/OB1-SHPL-7R_AL_REV5.STEP", "units": "mm", "upAxis": "y", "bodyCount": 2 }
+    "ob1": {
+      "file": "assets/source/OB1-V2-ALL.STEP",
+      "units": "mm",
+      "upAxis": "y",
+      "leaveOut": [
+        { "part": "SHIFT_KNOB_ROUND (M12x1.25)_H" },
+        { "part": "SHIFT_KNOB_SENNA (M12x1.25)_PRODUCTION" },
+        { "part": "OB1-SHPL-6R_MP_6R-DOWN" },
+        { "part": "OB1-SHPL-6R_MP_6R-UP" },
+        { "part": "OB1-SHPL-7R_V15_7R", "bodies": [4, 5] }
+      ]
+    },
+    "knob-round": { "file": "assets/source/SHIFT_KNOB_ROUND (M12x1.25)_REV2 (1).STEP", "units": "mm", "upAxis": "y" },
+    "knob-senna": { "file": "assets/source/SHIFT_KNOB_SENNA (M12x1.25)_REV2 (2).STEP", "units": "mm", "upAxis": "y" },
+    "plate-6r-down": { "file": "assets/source/OB1-SHPL_6RDOWN_AL_REV5.STEP", "units": "mm", "upAxis": "y", "placement": { "positionMm": [0, 100.25, 0] } },
+    "plate-6r-up": {
+      "file": "assets/source/OB1-SHPL_6RUP_AL_REV5.STEP",
+      "units": "mm",
+      "upAxis": "y",
+      "placement": { "positionMm": [0, 100.25, 0], "rotationDeg": [0, 180, 0] }
+    },
+    "plate-7r": { "file": "assets/source/OB1-SHPL-7R_AL_REV5.STEP", "units": "mm", "upAxis": "y", "placement": { "positionMm": [0, 100.25, 0] } }
   },
   "models": {
-    "body": {
-      "kind": "box",
-      "sizeMm": [90, 100, 90],
-      "sockets": {
-        "plateMount": { "positionMm": [0, 100, 0] },
-        "stickPivot": { "positionMm": [0, 100, 0] }
-      }
+    "housing": {
+      "kind": "converted",
+      "source": "ob1",
+      "parts": [{ "part": "ALI_SHIFTER_BODY_USB-C" }],
+      "sockets": { "logoLift": { "positionMm": [0, 0.05, 0.5] } }
     },
-    "rod": {
-      "kind": "cylinder",
-      "radiusMm": 6,
-      "heightMm": 81,
-      "sockets": { "tip": { "positionMm": [0, 81, 0] } }
+    "base": { "kind": "converted", "source": "ob1", "parts": [{ "part": "ALI_SHIFTER_BASE" }] },
+    "pad": { "kind": "converted", "source": "ob1", "parts": [{ "part": "OB1-SHFT-PAD" }] },
+    "usb-port": { "kind": "converted", "source": "ob1", "parts": [{ "part": "Same_Sky_UJ20-C-R-G-TH-3-P14" }], "simplifyErrorMm": 0.02 },
+    "plate-screws": {
+      "kind": "converted",
+      "source": "ob1",
+      "parts": [
+        { "part": "socket countersunk head screw_iso_ISO 10642 - M3 x 10 - 10S", "within": { "minMm": [-100, 50, -100], "maxMm": [100, 200, 100] } },
+        { "part": "socket countersunk head screw_iso_ISO 10642 - M3 x 12 - 12S" }
+      ],
+      "simplifyErrorMm": 0.1
+    },
+    "logo": { "kind": "converted", "source": "ob1", "parts": [{ "part": "OB1-SHPL-7R_V15_7R", "bodies": [0, 1, 2, 3] }] },
+    "plate-6r-down": {
+      "kind": "converted",
+      "source": "plate-6r-down",
+      "parts": [{ "bodies": [1] }],
+      "sockets": { "mechanism": { "positionMm": [0, 0, 0] } }
+    },
+    "grommet-6r-down": { "kind": "converted", "source": "plate-6r-down", "parts": [{ "bodies": [0] }] },
+    "plate-6r-up": {
+      "kind": "converted",
+      "source": "plate-6r-up",
+      "parts": [{ "bodies": [1] }],
+      "sockets": { "mechanism": { "positionMm": [0, 0, 0], "rotationDeg": [0, 180, 0] } }
+    },
+    "grommet-6r-up": { "kind": "converted", "source": "plate-6r-up", "parts": [{ "bodies": [0] }] },
+    "plate-7r": {
+      "kind": "converted",
+      "source": "plate-7r",
+      "parts": [{ "bodies": [1] }],
+      "sockets": { "mechanism": { "positionMm": [0, 0, 0] } }
+    },
+    "grommet-7r": { "kind": "converted", "source": "plate-7r", "parts": [{ "bodies": [0] }] },
+    "stick": {
+      "kind": "converted",
+      "source": "ob1",
+      "parts": [{ "part": "ROD, M8" }, { "part": "hex flange nut gradea_iso_ISO - 4161 - M8 - N" }, { "part": "THREAD COUPLER_M8x1.25" }],
+      "sockets": { "tip": { "positionMm": [-7.53, 151.25, 0] } },
+      "simplifyErrorMm": 0.05
     },
     "knob-round": {
       "kind": "converted",
       "source": "knob-round",
-      "bodyIndex": 0,
+      "parts": [{  }],
       "faceRules": [{ "kind": "dropNearAxis", "maxRadiusMm": 6.3, "maxHeightMm": 17 }]
     },
     "knob-senna": {
       "kind": "converted",
       "source": "knob-senna",
-      "bodyIndex": 0,
+      "parts": [{  }],
       "faceRules": [{ "kind": "dropNearAxis", "maxRadiusMm": 6.3, "maxHeightMm": 17 }]
     },
     "knob-ball": { "kind": "sphere", "radiusMm": 22, "attachPointMm": [0, -18, 0] },
-    "plate-6r-down": { "kind": "converted", "source": "plate-6r-down", "bodyIndex": 1 },
-    "plate-6r-up": { "kind": "converted", "source": "plate-6r-up", "bodyIndex": 1 },
-    "plate-7r": { "kind": "converted", "source": "plate-7r", "bodyIndex": 1 },
-    "grommet-6r-down": { "kind": "converted", "source": "plate-6r-down", "bodyIndex": 0 },
-    "grommet-6r-up": { "kind": "converted", "source": "plate-6r-up", "bodyIndex": 0 },
-    "grommet-7r": { "kind": "converted", "source": "plate-7r", "bodyIndex": 0 }
+    "board": { "kind": "converted", "source": "ob1", "parts": [{ "part": "ALI_SHIFTER_PCB_HAL_USB-C" }], "simplifyErrorMm": 0.03 },
+    "bracket": { "kind": "converted", "source": "ob1", "parts": [{ "part": "ALI_SHIFTER_BRACKET" }] },
+    "springs": {
+      "kind": "converted",
+      "source": "ob1",
+      "parts": [
+        { "part": "1804N221_Yellow Die Spring for 10 mm Hole Diameter_8mm OD" },
+        { "part": "1804N221_Yellow Die Spring for 10 mm Hole Diameter_6mm OD" }
+      ],
+      "simplifyErrorMm": 0.1
+    },
+    "bearings": {
+      "kind": "converted",
+      "source": "ob1",
+      "parts": [{ "part": "7804K126_Stainless Steel Ball Bearing_7804K126" }],
+      "simplifyErrorMm": 0.1
+    },
+    "mechanism-screws": {
+      "kind": "converted",
+      "source": "ob1",
+      "parts": [
+        { "part": "hexagon socket button head screws gb_MODIFIED2_GB_SOCKET_TYPE7 M3X6-S" },
+        { "part": "hexagon socket button head screws gb_MODIFIED2_GB_SOCKET_TYPE7 M3X10-S" },
+        { "part": "socket countersunk head screw_iso_ISO 10642 - M4 x 35 - 20N" }
+      ],
+      "simplifyErrorMm": 0.2
+    },
+    "base-screws": {
+      "kind": "converted",
+      "source": "ob1",
+      "parts": [{ "part": "socket countersunk head screw_iso_ISO 10642 - M3 x 10 - 10S", "within": { "minMm": [-100, -50, -100], "maxMm": [100, 50, 100] } }],
+      "simplifyErrorMm": 0.2
+    },
+    "mechanism-hardware": {
+      "kind": "converted",
+      "source": "ob1",
+      "parts": [
+        { "part": "torque nut 01_iso_ISO 7040-M3-N" },
+        { "part": "torque nut 01_iso_ISO 7040-M4-N" },
+        { "part": "plain washer 10669 type nl_iso_ISO 10669-4-N" },
+        { "part": "Top Spring Clip" }
+      ],
+      "simplifyErrorMm": 0.1
+    },
+    "board-hardware": {
+      "kind": "converted",
+      "source": "ob1",
+      "parts": [{ "part": "hex nuts, style 1-grades ab gb_GB_FASTENER_NUT_SNAB1 M3-N" }, { "part": "PCB-BUSHING" }],
+      "simplifyErrorMm": 0.1
+    }
   },
   "finishes": {
     "carbonWeave": { "kind": "carbonWeave", "towMm": 2.4 },
@@ -53,14 +147,34 @@
     "blue": { "kind": "metal", "color": "#2f62c9", "roughness": 0.28 },
     "tpuGrey": { "kind": "matte", "color": "#2b2b2d", "roughness": 0.85 },
     "bodyBlack": { "kind": "metal", "color": "#141414", "roughness": 0.55 },
-    "steel": { "kind": "metal", "color": "#dddddd", "roughness": 0.12 }
+    "steel": { "kind": "metal", "color": "#dddddd", "roughness": 0.12 },
+    "rubber": { "kind": "matte", "color": "#1a1a1a", "roughness": 0.9 },
+    "blackOxide": { "kind": "metal", "color": "#1c1c1c", "roughness": 0.4 },
+    "etchedAluminium": { "kind": "metal", "color": "#c4c8cc", "roughness": 0.35 },
+    "springRed": { "kind": "metal", "color": "#a8231d", "roughness": 0.45 },
+    "stainless": { "kind": "metal", "color": "#c8ccd0", "roughness": 0.25 },
+    "pcbBlack": { "kind": "matte", "color": "#161616", "roughness": 0.6 },
+    "zinc": { "kind": "metal", "color": "#b5b9bd", "roughness": 0.35 }
   },
   "slots": [
-    { "id": "body", "model": "body", "finish": "bodyBlack" },
-    { "id": "plate", "parent": "body", "socket": "plateMount", "placement": "socket", "model": "plate-6r-down", "finish": "carbonWeave" },
+    { "id": "housing", "model": "housing", "finish": "bodyBlack" },
+    { "id": "base", "parent": "housing", "placement": "asInCad", "model": "base", "finish": "bodyBlack" },
+    { "id": "pad", "parent": "housing", "placement": "asInCad", "model": "pad", "finish": "rubber" },
+    { "id": "usb-port", "parent": "housing", "placement": "asInCad", "model": "usb-port", "finish": "steel" },
+    { "id": "plate-screws", "parent": "housing", "placement": "asInCad", "model": "plate-screws", "finish": "blackOxide" },
+    { "id": "logo", "parent": "housing", "socket": "logoLift", "placement": "socket", "model": "logo", "finish": "etchedAluminium" },
+    { "id": "plate", "parent": "housing", "placement": "asInCad", "model": "plate-6r-down", "finish": "carbonWeave" },
     { "id": "grommet", "parent": "plate", "placement": "asInCad", "model": "grommet-6r-down", "finish": "tpuGrey" },
-    { "id": "rod", "parent": "body", "socket": "stickPivot", "placement": "socket", "model": "rod", "finish": "steel" },
-    { "id": "knob", "parent": "rod", "socket": "tip", "placement": "socket", "model": "knob-round", "finish": "carbonWeave" }
+    { "id": "stick", "parent": "plate", "socket": "mechanism", "placement": "socket", "model": "stick", "finish": "steel" },
+    { "id": "knob", "parent": "stick", "socket": "tip", "placement": "socket", "model": "knob-round", "finish": "carbonWeave" },
+    { "id": "board", "parent": "housing", "placement": "asInCad", "model": "board", "finish": "pcbBlack", "afterFirstView": true },
+    { "id": "bracket", "parent": "plate", "socket": "mechanism", "placement": "socket", "model": "bracket", "finish": "bodyBlack", "afterFirstView": true },
+    { "id": "springs", "parent": "plate", "socket": "mechanism", "placement": "socket", "model": "springs", "finish": "springRed", "afterFirstView": true },
+    { "id": "bearings", "parent": "plate", "socket": "mechanism", "placement": "socket", "model": "bearings", "finish": "stainless", "afterFirstView": true },
+    { "id": "mechanism-screws", "parent": "plate", "socket": "mechanism", "placement": "socket", "model": "mechanism-screws", "finish": "blackOxide", "afterFirstView": true },
+    { "id": "base-screws", "parent": "housing", "placement": "asInCad", "model": "base-screws", "finish": "blackOxide", "afterFirstView": true },
+    { "id": "mechanism-hardware", "parent": "plate", "socket": "mechanism", "placement": "socket", "model": "mechanism-hardware", "finish": "zinc", "afterFirstView": true },
+    { "id": "board-hardware", "parent": "housing", "placement": "asInCad", "model": "board-hardware", "finish": "zinc", "afterFirstView": true }
   ],
   "options": [
     {

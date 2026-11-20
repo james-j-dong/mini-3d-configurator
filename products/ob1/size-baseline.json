@@ -1,14 +1,27 @@
 {
-  "version": "9327d853bdd2",
+  "version": "ecc085ad1fc6",
   "brotliBytes": {
-    "knob-round": 42650,
-    "knob-senna": 65263,
-    "plate-6r-down": 23076,
-    "plate-6r-up": 23136,
-    "plate-7r": 23258,
-    "grommet-6r-down": 10822,
-    "grommet-6r-up": 10817,
-    "grommet-7r": 11306
+    "housing": 4573,
+    "base": 7036,
+    "pad": 4069,
+    "usb-port": 34460,
+    "plate-screws": 49649,
+    "logo": 7887,
+    "plate-6r-down": 19296,
+    "grommet-6r-down": 11534,
+    "plate-6r-up": 23427,
+    "grommet-6r-up": 11475,
+    "plate-7r": 40542,
+    "grommet-7r": 27016,
+    "stick": 32811,
+    "knob-round": 42581,
+    "knob-senna": 64162,
+    "board": 4431,
+    "bracket": 4633,
+    "springs": 38294,
+    "bearings": 38398,
+    "hidden-screws": 66912,
+    "zinc-hardware": 21230
   },
-  "totalBrotliBytes": 210328
+  "totalBrotliBytes": 554416
 }

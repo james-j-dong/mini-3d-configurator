@@ -1,23 +1,40 @@
 // What to load next, and which pick to show next. Pure logic, no WebGL.
-import type { Product, ResolvedConfiguration, Selection } from '../../schema/product.ts';
+import type { Product, ResolvedConfiguration, Selection, SlotDef } from '../../schema/product.ts';
 import { resolveConfiguration } from '../../schema/configurations.ts';
 
-/** The converted (downloaded) models a selection shows, in slot order. */
-export function convertedModelsOf(p: Product, s: Selection): string[] {
+/** The converted (downloaded) models a selection shows in the slots `include` accepts, in slot order. */
+function convertedModelsIn(p: Product, s: Selection, include: (slot: SlotDef) => boolean): string[] {
   const resolved: ResolvedConfiguration = resolveConfiguration(p, s);
   const result: string[] = [];
   for (const slot of p.slots) {
+    if (!include(slot)) continue;
     const model: string = resolved[slot.id].model;
     if (p.models[model].kind === 'converted' && !result.includes(model)) result.push(model);
   }
   return result;
 }
 
+/** The converted (downloaded) models a selection shows, in slot order. */
+export function convertedModelsOf(p: Product, s: Selection): string[] {
+  return convertedModelsIn(p, s, () => true);
+}
+
+/** Converted models of slots without afterFirstView, in slot order: what the first view and swaps wait for. */
+export function requiredModelsOf(p: Product, s: Selection): string[] {
+  return convertedModelsIn(p, s, slot => slot.afterFirstView !== true);
+}
+
+/** Converted models of afterFirstView slots, in slot order. */
+export function deferredModelsOf(p: Product, s: Selection): string[] {
+  return convertedModelsIn(p, s, slot => slot.afterFirstView === true);
+}
+
 /**
- * Background-loading order, most likely next picks first:
- * 1. the current configuration's converted models, in slot order;
- * 2. the models of configurations one change away, option by option, each in value order;
- * 3. every remaining converted model.
+ * Background-loading order, most likely needed first:
+ * 1. the current configuration's required models (what the first view waits for), in slot order;
+ * 2. its after-first-view models, in slot order;
+ * 3. the required models of configurations one change away, option by option, each in value order;
+ * 4. every remaining converted model.
  */
 export class LoadPlanner {
   private readonly product: Product;
@@ -32,10 +49,11 @@ export class LoadPlanner {
     const add = (models: string[]): void => {
       for (const m of models) if (!order.includes(m)) order.push(m);
     };
-    add(convertedModelsOf(p, current));
+    add(requiredModelsOf(p, current));
+    add(deferredModelsOf(p, current));
     for (const option of p.options) {
       for (const value of option.values) {
-        if (value.name !== current[option.name]) add(convertedModelsOf(p, { ...current, [option.name]: value.name }));
+        if (value.name !== current[option.name]) add(requiredModelsOf(p, { ...current, [option.name]: value.name }));
       }
     }
     add(Object.keys(p.models).filter(id => p.models[id].kind === 'converted'));

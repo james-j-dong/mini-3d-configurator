@@ -216,3 +216,65 @@ Live hosting notes:
 - JS and JSON are served brotli-compressed.
 - `.glb` files are served **uncompressed**: Cloudflare doesn't compress `model/gltf-binary`. They are already meshopt-compressed, but brotli would still save 40%: the first view's three parts are 126 KB as served versus 75 KB with brotli, and all default-level parts 342 KB versus 205 KB. Worth fixing before the Shopify phase, either by serving them with an encoding Cloudflare compresses or by pre-compressing.
 - The speed-test result doesn't say which quality tier it ran at; the stats panel's `render` line does (a deferred minor).
+
+## Assembly import sign-off (live URL, 2026-11-20)
+
+The OB1 now comes from the CAD assembly: 23 parts instead of v1's 8.
+- **Outside:** housing, base, pad, USB-C port and plate screws.
+- **Plates:** the REV5 plates and grommets, with the logo.
+- **Stick and knobs.**
+- **Seen through the gate:** the mechanism and the board.
+
+Site: https://mini3d.jamesdong.workers.dev/?stats, bundle `f8c06edc5347`, deployed 2026-11-20. Plan: `docs/superpowers/plans/2026-11-19-assembly-import.md`. Same speed test and targets as the v1 sign-off above.
+
+| Device and browser | Power | Build measured | Frames | Avg fps | p50 / p95 / max ms | Over 33.4 ms | Worst swap | First view | Verdict |
+|---|---|---|---|---|---|---|---|---|---|
+| Laptop (Intel Arc iGPU), Chrome | plugged in | `c5ae3733c66c`, local preview | 361 | 60.0 | 16.7 / 16.8 / 16.8 | 0 | 16.8 ms | not recorded | **pass**: full tier, DPR cap 1.5 |
+| Laptop, Chrome | battery | `c5ae3733c66c`, local preview | not recorded | 59.8 | not recorded / 16.8 / 19.0 | 0 | 16.7 ms | not recorded | **pass** on the second measured run (see below) |
+| Laptop, Firefox (user's run) | plugged in | `ecc085ad1fc6`, live | 361 | 60.0 | 17.0 / 17.2 / 17.4 | 0 | 17.2 ms | 369 ms after init; 3D shown at 803 ms | **pass** |
+| iPhone 12 Pro, Safari, Wi-Fi (user's run) | charging | `ecc085ad1fc6`, live | 353 | 58.8 | 17.0 / 18.0 / 18.0 | 0 | 18.0 ms | 205 ms after init; 3D shown at 531 ms | **pass** |
+| iPhone 12 Pro, Safari, 5G, Safari force-quit first (user's run) | charging | `ecc085ad1fc6`, live | 351 | 58.5 | 17.0 / 18.0 / 19.0 | 0 | 18.0 ms | 217 ms after init; 3D shown at 455 ms | **pass** |
+
+"3D shown" is measured from page start. No run had a slow swap.
+
+Notes on the runs:
+- **Builds measured.**
+  - The laptop Chrome runs measured `c5ae3733c66c` (580.1 KB, 112,495 triangles in the default scene). That was before the final review simplified the stick and the USB-C port.
+  - The phone and Firefox runs measured `ecc085ad1fc6` (541.4 KB, 86,503 triangles).
+  - The live `f8c06edc5347` is 514.9 KB. It adds the REV5 plates and the 6+R Up stick fix. It wasn't speed-tested again; it has the automated checks and the user's look check below.
+- **Background apps.** The first plugged-in runs (57.7 and 56.3 fps, max 35.9 ms) had Discord, Steam and other apps running. Live v1 did worse in the same minutes. The table's runs were made with those apps closed.
+- **Battery.** The quality governor settled at lean / DPR 0.75 on this build, and on live v1 in the same minutes. v1 held the full tier on 2026-11-17, so the laptop's own state is what changed.
+  - The first measured run had 3 frames of about 36 ms (55.0 fps). Those frames are the governor trying one level up and failing; it then waits 60 s before trying again.
+  - v1 showed the same frames under the same conditions.
+- **iPhone caching.** As in v1, the iPhone runs likely came from Safari's HTTP cache, since the bundles are cached for a year. The emulated slow-4G test below covers a true first visit. A first visit in a Private tab on 5G wasn't measured.
+- **Firefox downloads.** Firefox downloaded 877 KB of 3D files. That is every part, because background loading also fetches the variants. `.glb` files are still served uncompressed (see the hosting notes above).
+
+Sizes of `f8c06edc5347` (brotli, default level):
+
+| Group | Parts | KB |
+|---|---|---|
+| Always shown: housing, base, pad, USB-C port, plate screws, logo, stick | 7 | 137.2 |
+| Variants: 3 plates, 3 grommets, 2 knobs | 8 | 206.3 |
+| After first view: board, bracket, springs, bearings, mechanism screws, base screws, 2 hardware sets | 8 | 171.4 |
+| **Total** | **23** | **514.9** |
+
+- **Total size.** v1 was 210.3 KB for 8 parts.
+- **First view.** The default first view (always-shown parts, the 6+R Down plate and grommet, and the Round knob) is 212.8 KB, against v1's 76.5 KB.
+- **After first view.** The internals load after the first view, and no swap waits for them.
+- **Size baseline.** It is `ecc085ad1fc6` at 541.4 KB; the live build is 4.9% under it.
+
+Automated checks on `f8c06edc5347`:
+- Unit tests 65/65; typecheck clean.
+- Playwright: Chromium and Firefox 23/23; WebKit 11 passed, 1 skipped (slow 4G runs only in Chromium).
+- Emulated slow 4G (1.6 Mbps, 150 ms RTT): the first view's 10 parts finished in **4.28 s** over two runs (target < 5 s; v1 took 3.0 s with 3 parts).
+- After the deploy, headless Chromium on the live site:
+  - the pointer and product were `f8c06edc5347`;
+  - the viewer reached `ready` and showed every after-first-view part;
+  - there were no viewer or console errors.
+
+Look check (the user, on the live site, 2026-11-20): **passed**.
+- The stick rests in the right neutral on all three patterns. On 6+R Up, the stick and its mechanism turn 180° so it rests between gates 3 and 4.
+- The logo shows on all three plates without flicker.
+- The springs read as red, the board as black, and the USB-C port as a port.
+- The screw heads sit flush.
+- The internals appearing after the first view isn't noticeable.

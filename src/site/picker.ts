@@ -1,5 +1,5 @@
-// The option picker: one group per option, values in settings-file order. Swatch values show a
-// 22 px chip; values without a swatch (the shift pattern) are text buttons.
+// The option picker: one group per option, values in settings-file order, each a plain text button.
+// It stands in for a store's own picker, so it ignores the values' swatch colours.
 import type { BuiltProduct, Selection } from '../schema/product.ts';
 
 export function renderPicker(container: HTMLElement, product: BuiltProduct, selection: Selection, onPick: (option: string, value: string) => void): void {
@@ -18,19 +18,7 @@ export function renderPicker(container: HTMLElement, product: BuiltProduct, sele
       button.type = 'button';
       button.dataset.option = option.name;
       button.dataset.value = value.name;
-      if (value.swatch) {
-        button.className = 'swatch';
-        const chip: HTMLSpanElement = document.createElement('span');
-        chip.className = 'chip';
-        chip.style.background = value.swatch.css;
-        chip.setAttribute('aria-hidden', 'true');
-        const label: HTMLSpanElement = document.createElement('span');
-        label.textContent = value.name;
-        button.append(chip, label);
-      } else {
-        button.className = 'text';
-        button.textContent = value.name;
-      }
+      button.textContent = value.name;
       button.addEventListener('click', () => onPick(option.name, value.name));
       values.append(button);
     }

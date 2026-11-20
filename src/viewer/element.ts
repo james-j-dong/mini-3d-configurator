@@ -1,7 +1,7 @@
 // <mini3d-viewer product="ob1" [stats]>: the embeddable 3D viewer. It holds no product or store
 // knowledge; a page drives it only through setConfiguration(), `product`, `configuration` and events.
-import type { BuiltProduct, Selection } from '../schema/product.ts';
-import { validateProduct, ProductError } from '../schema/validate.ts';
+import type { BuiltProduct, Selection, SlotDef } from '../schema/product.ts';
+import { possibleModels, validateProduct, ProductError } from '../schema/validate.ts';
 import { configurationKey, normaliseSelection } from '../schema/configurations.ts';
 import type { DebugInfo, FromEngine, SpeedTestResult, ToEngine } from './protocol.ts';
 import { createEngineHost, type EngineHost } from './host.ts';
@@ -257,7 +257,10 @@ export class Mini3dViewer extends HTMLElement {
         this.fire('restored', {});
         break;
       case 'error':
-        if (m.reason.startsWith('model-load-failed')) this.requested = { ...this.shown };
+        // A failed pick falls back to what's shown; a failed after-first-view part leaves any pick in flight alone.
+        if (m.reason.startsWith('model-load-failed') && !this.isAfterFirstViewModel(m.reason.slice(m.reason.indexOf(':') + 1).trim())) {
+          this.requested = { ...this.shown };
+        }
         if (m.fatal) this.onFatal();
         this.fire('error', { reason: m.reason, fatal: m.fatal });
         break;
@@ -292,6 +295,14 @@ export class Mini3dViewer extends HTMLElement {
   }
 
   // ---------- helpers ----------
+
+  /** Only after-first-view slots can hold this model, so no pick ever waits for it. */
+  private isAfterFirstViewModel(modelId: string): boolean {
+    const product: BuiltProduct | null = this.builtProduct;
+    if (!product) return false;
+    const holders: SlotDef[] = product.slots.filter(s => possibleModels(product, s.id).has(modelId));
+    return holders.length > 0 && holders.every(s => s.afterFirstView === true);
+  }
 
   private showStill(selection: Selection): void {
     const product: BuiltProduct | null = this.builtProduct;

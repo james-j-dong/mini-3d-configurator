@@ -20,9 +20,32 @@ npm run stills -- ob1             # one WebP still per configuration, rendered b
 npm run build                     # the site into dist/ (copies public/)
 ```
 
-- `npm run convert -- products/ob1 --inspect` lists every body in every source file (index, name, size in mm), to map bodies in the settings file.
+- `npm run convert -- products/ob1 --inspect` lists every part in every source file, from one quick coarse read, to write the settings file from. One line per part instance: `"name" #occurrence`, its body count, size and centre (mm), and a coarse triangle count. A part made of several unnamed bodies gets an indented `body k` line per body (size and centre), and bodies under no named part are listed last as `(unnamed) body k`.
 - The converter compares the total size with `products/<id>/size-baseline.json` and exits 1 on growth over 10%. Rerun with `--update-baseline` when the growth is intended.
+- The table it prints has each model's group (`alwaysShown`, `variants`, `afterFirstView`), its triangles at the default level, the triangles face rules dropped and simplification removed, and its brotli size at both levels. A line after it totals each group.
 - Rerun `convert` and then `stills` whenever a STEP file, a model, a finish, an assembly dimension or the render code in `src/viewer/render/` changes. The bundle version hashes all of these, so a look change gets a new bundle path instead of overwriting year-cached stills.
+
+### Picking parts out of a source
+
+A source can be a single-part STEP file or a whole assembly; parts keep their positions from the CAD file. A converted model lists one or more part selections in `parts`, merged into one mesh:
+
+```jsonc
+"plate-screws": { "kind": "converted", "source": "ob1", "simplifyErrorMm": 0.02, "parts": [
+  { "part": "M3 x 10 screw", "within": { "minMm": [-100, 50, -100], "maxMm": [100, 200, 100] } },  // only the instances up top
+  { "part": "M3 x 12 screw" }
+] },
+"logo":      { "kind": "converted", "source": "ob1", "parts": [{ "part": "7R plate", "bodies": [0, 1, 2, 3] }] },
+"knob-round": { "kind": "converted", "source": "knob-round", "parts": [{}] }   // {} = the whole file
+```
+
+- `part`: a node or mesh name anywhere in the file's tree, matched exactly (copy it from `--inspect`). A name that repeats matches every instance.
+- `bodies`: body positions within each matched instance, 0-based, as `--inspect` numbers them.
+- `within`: keeps only instances whose box centre lies inside this box (source millimetres, Y-up).
+- `leaveOut` (on a source): selections deliberately left out of the build.
+- `placement` (on a source): where a separate part file's own frame sits in the product, as `{ "positionMm": [x, y, z], "rotationDeg": [x, y, z] }` (rotation first, XYZ order). The converter bakes it into the GLBs, so the parts load as in CAD. An assembly needs none. `parts`, `within`, face rules and `--inspect` all use the file's own frame.
+- **Every body of a source must belong to exactly one model or to `leaveOut`.** A body nobody claims, a body claimed twice, or a selection that matches nothing fails the build with a report of each body's part, size and position.
+- `simplifyErrorMm` (on a model): simplifies the merged mesh to this error in millimetres (the light level uses twice as much). Each part is otherwise tessellated at the same quality relative to its own size, whatever file it came from.
+- `afterFirstView` (on a slot): the slot's part loads after the first view, and neither the first view nor swaps wait for it. It needs a converted model that no option swaps and no other slot without `afterFirstView` can hold, and the root slot can't use it.
 
 ## Developing
 
@@ -63,3 +86,10 @@ npm run convert -- products/ob1 && npm run stills -- ob1 && npm run deploy
 
 The page drives the viewer through `viewer.product`, `viewer.configuration`, `viewer.setConfiguration({...})` and the events
 `productload`, `progress`, `ready`, `configurationchange`, `error` and `restored`.
+
+`progress` carries `{ loaded, total, phase }`, one phase at a time:
+- `current`: the parts the first view waits for;
+- `deferred`: after `ready`, the configuration's after-first-view parts; `loaded` counts parts shown or failed, so `loaded === total` means nothing more will appear;
+- `background`: every other part, loaded ahead of the next picks.
+
+A part that fails to download sends a non-fatal `error` with reason `model-load-failed: <model id>`. If it was an after-first-view part, nothing else changes.

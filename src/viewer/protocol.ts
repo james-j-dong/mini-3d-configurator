@@ -34,7 +34,7 @@ export type ToEngine =
 
 export type FromEngine =
   | { type: 'product'; product: BuiltProduct }
-  | { type: 'progress'; loaded: number; total: number; phase: 'current' | 'background' }
+  | { type: 'progress'; loaded: number; total: number; phase: 'current' | 'deferred' | 'background' }
   | { type: 'ready' }
   | { type: 'configured'; selection: Selection }
   | { type: 'restored' }

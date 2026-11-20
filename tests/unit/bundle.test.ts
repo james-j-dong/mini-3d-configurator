@@ -1,8 +1,12 @@
 import { expect, test } from 'vitest';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { checkBodyMapping, compareWithBaseline, computeVersion, lookFingerprint, type SizeReport } from '../../src/convert/bundle.ts';
+import type { Product } from '../../src/schema/product.ts';
+import { validateProduct } from '../../src/schema/validate.ts';
+import { compareWithBaseline, computeVersion, groupModels, lookFingerprint, type SizeReport } from '../../src/convert/bundle.ts';
+
+const ob1: Product = validateProduct(JSON.parse(readFileSync('products/ob1/product.json', 'utf8')));
 
 test('same inputs give the same version', () => {
   const a = computeVersion('{"x":1}', [['b', new Uint8Array([2])], ['a', new Uint8Array([1])]]);
@@ -18,10 +22,12 @@ test('flags growth over 10%', () => {
   expect(compareWithBaseline(r(5000), null).flagged).toBe(false);
 });
 
-test('a body the settings file does not mention fails the build', () => {
-  expect(() => checkBodyMapping('plate-6r-down', [{ index: 0, sizeMm: [63, 3, 55] }, { index: 1, sizeMm: [90, 3, 90] }], 2, [0], []))
-    .toThrow(/plate-6r-down.*body 1.*90 × 3 × 90/);
-  expect(() => checkBodyMapping('knob-round', [{ index: 0, sizeMm: [50, 50, 50] }], 2, [0], [])).toThrow(/expected 2 bodies, found 1/);
+test('groups models into always shown, variants and after the first view', () => {
+  expect(groupModels(ob1)).toEqual({
+    alwaysShown: ['housing', 'base', 'pad', 'usb-port', 'plate-screws', 'logo', 'stick'],
+    variants: ['plate-6r-down', 'grommet-6r-down', 'plate-6r-up', 'grommet-6r-up', 'plate-7r', 'grommet-7r', 'knob-round', 'knob-senna'],
+    afterFirstView: ['board', 'bracket', 'springs', 'bearings', 'mechanism-screws', 'base-screws', 'mechanism-hardware', 'board-hardware'],
+  });
 });
 
 test('a change to the render code that draws the stills changes the bundle fingerprint', () => {

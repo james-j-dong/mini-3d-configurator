@@ -90,12 +90,28 @@ async function waitForSettled(page: Page): Promise<Selection[]> {
     .filter(e => e.name === 'configurationchange').map(e => (e.detail as { selection: Record<string, string> }).selection));
 }
 
-async function waitForProgressComplete(page: Page, phase: 'current' | 'background'): Promise<void> {
+async function waitForProgressComplete(page: Page, phase: 'current' | 'deferred' | 'background'): Promise<void> {
   await page.waitForFunction((p: string) => (window as unknown as { __events: ViewerEvent[] }).__events.some(e =>
     e.name === 'progress' && e.detail.phase === p && e.detail.loaded === e.detail.total), phase, { timeout: 60_000 });
 }
 const waitForBackgroundLoad = (page: Page): Promise<void> => waitForProgressComplete(page, 'background');
 const waitForCurrentPartsLoaded = (page: Page): Promise<void> => waitForProgressComplete(page, 'current');
+
+/** Holds every request matching `url` until the returned function is called. */
+async function holdRequests(page: Page, url: RegExp): Promise<() => void> {
+  let release: () => void = (): void => {};
+  const released: Promise<void> = new Promise(resolve => { release = resolve; });
+  await page.route(url, async route => { await released; await route.continue(); });
+  return (): void => release();
+}
+
+/** Holds every request matching `url` until the returned function is called, then fails them. */
+async function holdThenFail(page: Page, url: RegExp): Promise<() => void> {
+  let release: () => void = (): void => {};
+  const released: Promise<void> = new Promise(resolve => { release = resolve; });
+  await page.route(url, async route => { await released; await route.abort(); });
+  return (): void => release();
+}
 
 const canvasSize = (page: Page): Promise<{ width: number; height: number }> => page.evaluate(() => {
   const r: DOMRect = document.querySelector('mini3d-viewer')!.shadowRoot!.querySelector('canvas')!.getBoundingClientRect();
@@ -111,7 +127,7 @@ function trackCriticalResponses(page: Page): { latestMs: () => number; seen: str
   const navigationStart: number = Date.now();
   let latest: number = 0;
   const seen: string[] = [];
-  const critical = (url: string): boolean => /\/v1\/loader\.js$|\/v1\/assets\/.+\.js$|\/product\.json$|\/products\/ob1\.json$|\/parts\/(knob-round|plate-6r-down|grommet-6r-down)\.glb$/.test(new URL(url).pathname);
+  const critical = (url: string): boolean => /\/v1\/loader\.js$|\/v1\/assets\/.+\.js$|\/product\.json$|\/products\/ob1\.json$|\/parts\/(housing|base|pad|usb-port|plate-screws|logo|stick|plate-6r-down|grommet-6r-down|knob-round)\.glb$/.test(new URL(url).pathname);
   page.on('requestfinished', request => {
     if (!critical(request.url())) return;
     const timing = request.timing();
@@ -190,9 +206,57 @@ test('first parts arrive within 5 s on slow 4G', async ({ page, browserName }) =
   const lastCriticalResponseEndMs = critical.latestMs;
   await page.goto('/'); await waitForCurrentPartsLoaded(page);                     // progress phase 'current' reaches total
   // The render worker's downloads must be in the measurement, or the test proves nothing.
-  expect(critical.seen).toEqual(expect.arrayContaining(['loader.js', 'product.json', 'knob-round.glb', 'plate-6r-down.glb', 'grommet-6r-down.glb']));
+  expect(critical.seen).toEqual(expect.arrayContaining([
+    'loader.js', 'product.json', 'housing.glb', 'base.glb', 'pad.glb', 'usb-port.glb', 'plate-screws.glb', 'logo.glb', 'stick.glb',
+    'plate-6r-down.glb', 'grommet-6r-down.glb', 'knob-round.glb',
+  ]));
   test.info().annotations.push({ type: 'slow-4G critical path', description: `${lastCriticalResponseEndMs().toFixed(0)} ms (${critical.seen.join(', ')})` });
   expect(lastCriticalResponseEndMs()).toBeLessThan(5000);                         // loader, viewer chunks, product.json, current GLBs
+});
+
+const AFTER_FIRST_VIEW: RegExp = /\/parts\/(board|bracket|springs|bearings|mechanism-screws|base-screws|mechanism-hardware|board-hardware)(\.light)?\.glb$/;
+
+test('after-first-view parts neither delay the first view or picks nor compile new shaders', async ({ page }) => {   // Review Focus 1
+  const release = await holdRequests(page, AFTER_FIRST_VIEW);
+  await page.goto('/?stats'); await waitFor(page, 'ready');                 // every internal part is still held
+  const before = await debugInfo(page);
+  await pick(page, 'Shift Pattern', '7+R'); await waitFor(page, 'configurationchange');
+  await pick(page, 'Shift Knob', 'Carbon Forged | Teardrop'); await waitFor(page, 'configurationchange');
+  release();
+  await waitForProgressComplete(page, 'deferred');
+  expect((await debugInfo(page)).programs).toBe(before.programs);
+});
+
+test('an after-first-view part that fails is reported and blocks nothing', async ({ page }) => {   // Review Focus 2
+  allowedConsole = /bearings|Failed to load resource|net::ERR_FAILED|NS_ERROR|Load failed/i;
+  await page.route('**/parts/bearings*.glb', r => r.abort());
+  await page.goto('/'); await waitFor(page, 'ready');
+  expect(await nextError(page)).toEqual(expect.objectContaining({ fatal: false, reason: expect.stringContaining('bearings') }));
+  await waitForProgressComplete(page, 'deferred');
+  await pick(page, 'Shift Knob', 'Carbon Forged | Round'); await waitFor(page, 'configurationchange');
+});
+
+test('an after-first-view part that fails never drops a pick still waiting for its parts', async ({ page }) => {
+  allowedConsole = /bearings|Failed to load resource|net::ERR_FAILED|NS_ERROR|Load failed/i;
+  const failBearings = await holdThenFail(page, /\/parts\/bearings(\.light)?\.glb$/);
+  const releaseSenna = await holdRequests(page, /\/parts\/knob-senna(\.light)?\.glb$/);
+  await page.goto('/'); await waitFor(page, 'ready');
+  await pick(page, 'Shift Knob', 'Carbon Weave | Teardrop');               // waits for its held knob
+  failBearings();
+  expect(await nextError(page)).toEqual(expect.objectContaining({ fatal: false, reason: expect.stringContaining('bearings') }));
+  await pick(page, 'Shift Plate Style', 'Forged Carbon');                 // a partial pick, merged onto the one in flight
+  releaseSenna();
+  await waitFor(page, 'configurationchange');
+  expect(await waitForSettled(page)).toEqual([{ ...DEFAULT, 'Shift Knob': 'Carbon Weave | Teardrop', 'Shift Plate Style': 'Forged Carbon' }]);
+});
+
+test('after-first-view parts still appear after a lost graphics context', async ({ page }) => {   // Review Focus 3
+  const release = await holdRequests(page, AFTER_FIRST_VIEW);
+  await page.goto('/?stats'); await waitFor(page, 'ready');
+  await page.evaluate(() => (document.querySelector('mini3d-viewer') as unknown as { debugLoseContext(): void }).debugLoseContext());
+  await waitFor(page, 'restored');
+  release();
+  await waitForProgressComplete(page, 'deferred');
 });
 
 test('a loader.js cached from before a deploy still brings up the viewer', async ({ page }) => {

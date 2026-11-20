@@ -37,11 +37,6 @@ function number(v: unknown, path: string, min: number = -Infinity): number {
   return v;
 }
 
-function integer(v: unknown, path: string, min: number = 0): number {
-  if (!Number.isInteger(v) || (v as number) < min) throw new ProductError(path, `expected an integer ≥ ${min}`);
-  return v as number;
-}
-
 function oneOf<T extends string>(v: unknown, allowed: readonly T[], path: string): T {
   if (!allowed.includes(v as T)) throw new ProductError(path, `expected one of ${allowed.join(', ')}`);
   return v as T;
@@ -69,6 +64,26 @@ function validatePlacement(v: unknown, path: string): void {
   if (p.rotationDeg !== undefined) vec3(p.rotationDeg, `${path}.rotationDeg`);
 }
 
+/** A PartSelection: an optional part name, body positions and a box the instance centre must lie in. */
+function validateSelection(v: unknown, path: string): void {
+  const sel: Json = record(v, path);
+  if (sel.part !== undefined) string(sel.part, `${path}.part`);
+  if (sel.bodies !== undefined) {
+    const bodies: unknown = sel.bodies;
+    if (!Array.isArray(bodies) || bodies.length === 0 || !bodies.every(b => Number.isInteger(b) && (b as number) >= 0)) {
+      throw new ProductError(`${path}.bodies`, 'expected a non-empty array of integers ≥ 0');
+    }
+  }
+  if (sel.within !== undefined) {
+    const within: Json = record(sel.within, `${path}.within`);
+    vec3(within.minMm, `${path}.within.minMm`);
+    vec3(within.maxMm, `${path}.within.maxMm`);
+    const min: number[] = within.minMm as number[];
+    const max: number[] = within.maxMm as number[];
+    if ([0, 1, 2].some(a => min[a] > max[a])) throw new ProductError(`${path}.within`, 'every minMm value must be ≤ its maxMm value');
+  }
+}
+
 function validateSources(sources: Json): void {
   for (const [key, value] of Object.entries(sources)) {
     const path: string = `sources.${key}`;
@@ -76,12 +91,8 @@ function validateSources(sources: Json): void {
     string(s.file, `${path}.file`);
     oneOf(s.units, ['mm', 'm', 'in'] as const, `${path}.units`);
     oneOf(s.upAxis, ['y', 'z'] as const, `${path}.upAxis`);
-    const bodyCount: number = integer(s.bodyCount, `${path}.bodyCount`, 1);
-    if (s.dropBodies !== undefined) {
-      array(s.dropBodies, `${path}.dropBodies`).forEach((b, i) => {
-        if (integer(b, `${path}.dropBodies[${i}]`) >= bodyCount) throw new ProductError(`${path}.dropBodies[${i}]`, 'body index out of range');
-      });
-    }
+    if (s.leaveOut !== undefined) array(s.leaveOut, `${path}.leaveOut`).forEach((sel, i) => validateSelection(sel, `${path}.leaveOut[${i}]`));
+    if (s.placement !== undefined) validatePlacement(s.placement, `${path}.placement`);
   }
 }
 
@@ -91,9 +102,13 @@ function validateModels(models: Json, sources: Json): void {
     const m: Json = record(value, path);
     const kind = oneOf(m.kind, ['converted', 'box', 'cylinder', 'sphere'] as const, `${path}.kind`);
     if (kind === 'converted') {
-      const sourceKey: string = reference(m.source, sources, `${path}.source`);
-      const bodyCount: number = (sources[sourceKey] as Json).bodyCount as number;
-      if (integer(m.bodyIndex, `${path}.bodyIndex`) >= bodyCount) throw new ProductError(`${path}.bodyIndex`, `source has only ${bodyCount} bodies`);
+      reference(m.source, sources, `${path}.source`);
+      const parts: unknown[] = array(m.parts, `${path}.parts`);
+      if (parts.length === 0) throw new ProductError(`${path}.parts`, 'expected at least one part selection');
+      parts.forEach((sel, i) => validateSelection(sel, `${path}.parts[${i}]`));
+      if (m.simplifyErrorMm !== undefined && !(number(m.simplifyErrorMm, `${path}.simplifyErrorMm`) > 0)) {
+        throw new ProductError(`${path}.simplifyErrorMm`, 'expected a number > 0');
+      }
       if (m.faceRules !== undefined) {
         array(m.faceRules, `${path}.faceRules`).forEach((r, i) => {
           const rulePath: string = `${path}.faceRules[${i}]`;
@@ -148,6 +163,10 @@ function validateSlots(slots: unknown[], models: Json, finishes: Json): void {
     reference(s.finish, finishes, `${path}.finish`);
     if (s.placement !== undefined) oneOf(s.placement, ['socket', 'asInCad'] as const, `${path}.placement`);
     if (s.socket !== undefined) string(s.socket, `${path}.socket`);
+    if (s.afterFirstView !== undefined) {
+      if (typeof s.afterFirstView !== 'boolean') throw new ProductError(`${path}.afterFirstView`, 'expected true or false');
+      if (s.afterFirstView && s.parent === undefined) throw new ProductError(`${path}.afterFirstView`, 'the root slot always loads with the first view');
+    }
   });
 
   const typed: SlotDef[] = slots as SlotDef[];
@@ -225,6 +244,22 @@ function validateSockets(p: Product): void {
   });
 }
 
+/**
+ * An after-first-view slot holds one converted model, which no option swaps and no required slot can
+ * hold. The viewer loads, reveals and reports such parts on their own, and the stills wait for them
+ * once; anything else could leave a part out of the view or a still without saying so.
+ */
+function validateAfterFirstView(p: Product): void {
+  p.slots.forEach((s, i) => {
+    if (s.afterFirstView !== true) return;
+    const path: string = `slots[${i}].afterFirstView`;
+    if (p.models[s.model].kind !== 'converted') throw new ProductError(path, `model "${s.model}" is not converted (downloaded), so it can't load after the first view`);
+    if (possibleModels(p, s.id).size > 1) throw new ProductError(path, 'an option changes this slot\'s model; only a slot with one model can load after the first view');
+    const required: SlotDef | undefined = p.slots.find(other => other.afterFirstView !== true && possibleModels(p, other.id).has(s.model));
+    if (required) throw new ProductError(path, `model "${s.model}" is also held by slot "${required.id}", which loads with the first view`);
+  });
+}
+
 function validateDefaultSelection(p: Product, raw: unknown): void {
   const selection: Json = record(raw, 'defaultSelection');
   for (const option of p.options) {
@@ -250,7 +285,7 @@ function validateFraming(raw: unknown): void {
  */
 export function validateProduct(input: unknown): Product {
   const root: Json = record(input, '(root)');
-  if (root.schemaVersion !== 1) throw new ProductError('schemaVersion', 'expected 1');
+  if (root.schemaVersion !== 2) throw new ProductError('schemaVersion', 'expected 2');
   string(root.id, 'id');
   string(root.name, 'name');
   const sources: Json = record(root.sources, 'sources');
@@ -265,6 +300,7 @@ export function validateProduct(input: unknown): Product {
   validateOptions(array(root.options, 'options'), slotIds, models, finishes);
   const product: Product = input as Product;
   validateSockets(product);
+  validateAfterFirstView(product);
   validateDefaultSelection(product, root.defaultSelection);
   validateFraming(root.framing);
   return product;

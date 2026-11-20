@@ -29,7 +29,7 @@ test('resolves a selection to slot models and finishes', () => {
   expect(r.knob).toEqual({ model: 'knob-senna', finish: 'forgedCarbon' });
   expect(r.plate).toEqual({ model: 'plate-7r', finish: 'anodizedGrey' });
   expect(r.grommet).toEqual({ model: 'grommet-7r', finish: 'tpuGrey' });
-  expect(r.rod).toEqual({ model: 'rod', finish: 'steel' });
+  expect(r.stick).toEqual({ model: 'stick', finish: 'steel' });
 });
 
 test.each([
@@ -37,8 +37,19 @@ test.each([
   ['missing parent slot', (p: any) => { p.slots[1].parent = 'nope'; }, 'slots[1].parent'],
   ['parent cycle', (p: any) => { p.slots[0].parent = 'knob'; p.slots[0].socket = 'x'; }, 'slots'],
   ['option sets an unknown slot', (p: any) => { p.options[0].values[0].sets[0].slot = 'nope'; }, 'options[0].values[0].sets[0].slot'],
-  ['socket missing on a parent model', (p: any) => { p.slots[1].socket = 'nope'; }, 'slots[1].socket'],
+  ['socket missing on a parent model', (p: any) => { p.slots[9].socket = 'nope'; }, 'slots[9].socket'],
   ['converted model with unknown source', (p: any) => { p.models['knob-round'].source = 'nope'; }, 'models.knob-round.source'],
+  ['old settings format', (p: any) => { p.schemaVersion = 1; }, 'schemaVersion'],
+  ['model with no parts', (p: any) => { p.models.housing.parts = []; }, 'models.housing.parts'],
+  ['selection box inside out', (p: any) => { p.models['plate-screws'].parts[0].within.minMm[1] = 300; }, 'models.plate-screws.parts[0].within'],
+  ['root slot after the first view', (p: any) => { p.slots[0].afterFirstView = true; }, 'slots[0].afterFirstView'],
+  ['left-out selection with a bad body', (p: any) => { p.sources.ob1.leaveOut[0].bodies = [-1]; }, 'sources.ob1.leaveOut[0].bodies'],
+  ['source placement with a bad rotation', (p: any) => { p.sources['plate-6r-up'].placement.rotationDeg = [0, 180]; }, 'sources.plate-6r-up.placement.rotationDeg'],
+  // After-first-view slots must hold one converted model that no required slot can hold, or the
+  // engine and the stills could leave the part out without saying so.
+  ['after-first-view slot holding a primitive', (p: any) => { p.slots[10].model = 'knob-ball'; }, 'slots[10].afterFirstView'],
+  ['option swaps an after-first-view slot\'s model', (p: any) => { p.options[0].values[0].sets.push({ slot: 'board', model: 'bracket' }); }, 'slots[10].afterFirstView'],
+  ['after-first-view model also held by a required slot', (p: any) => { p.slots[11].model = 'stick'; }, 'slots[11].afterFirstView'],
 ])('rejects a broken file: %s', (_n, breakIt, path) => {
   const p = ob1() as any; breakIt(p);
   try { validateProduct(p); throw new Error('accepted'); } catch (e) { expect(e).toBeInstanceOf(ProductError); expect((e as ProductError).path).toBe(path); }
