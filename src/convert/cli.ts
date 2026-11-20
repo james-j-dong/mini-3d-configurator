@@ -38,6 +38,8 @@ async function inspect(productDir: string): Promise<void> {
     index.owner.forEach((owner, b) => {
       if (owner < 0) console.log(`  ${describeBody(index, b)}  ${triangles([b])} triangles (coarse)`);
     });
+    const stated: string = source.bodyCount === undefined ? 'no "bodyCount" set' : `"bodyCount" is ${source.bodyCount}`;
+    console.log(`  ${file.bodies.length} bodies in the file (${stated})`);
   }
 }
 
@@ -48,20 +50,22 @@ async function convert(productDir: string, updateBaseline: boolean): Promise<num
   console.table(rows.map(r => ({
     model: r.model,
     group: r.group,
+    bodies: r.bodies,
     triangles: r.triangles,
     dropped: r.droppedTriangles,
     simplified: r.simplifiedTriangles,
-    'brotli KB': kb(r.brotliBytes),
-    'light brotli KB': kb(r.lightBrotliBytes),
+    'download KB': kb(r.gzipBytes),
+    'light download KB': kb(r.lightGzipBytes),
   })));
-  const groupKb = (group: ModelGroup): string => kb(rows.filter(r => r.group === group).reduce((sum, r) => sum + r.brotliBytes, 0));
-  console.log(`always shown: ${groupKb('alwaysShown')} KB · variants: ${groupKb('variants')} KB · after first view: ${groupKb('afterFirstView')} KB (brotli, default level)`);
+  const groupKb = (group: ModelGroup): string => kb(rows.filter(r => r.group === group).reduce((sum, r) => sum + r.gzipBytes, 0));
+  console.log(`always shown: ${groupKb('alwaysShown')} KB · variants: ${groupKb('variants')} KB · after first view: ${groupKb('afterFirstView')} KB (as downloaded: gzip, default level)`);
 
   const baselinePath: string = join(productDir, 'size-baseline.json');
   const baseline: SizeReport | null = existsSync(baselinePath) ? JSON.parse(readFileSync(baselinePath, 'utf8')) as SizeReport : null;
   const { deltaRatio, flagged } = compareWithBaseline(report, baseline);
-  const delta: string = baseline ? `${deltaRatio >= 0 ? '+' : ''}${(deltaRatio * 100).toFixed(1)}% against baseline ${baseline.version}` : 'no baseline yet';
-  console.log(`version ${report.version}: ${rows.length} models, total ${kb(report.totalBrotliBytes)} KB brotli (default level), ${delta}`);
+  const comparable: boolean = baseline !== null && baseline.totalGzipBytes > 0; // an older baseline measured brotli sizes
+  const delta: string = comparable ? `${deltaRatio >= 0 ? '+' : ''}${(deltaRatio * 100).toFixed(1)}% against baseline ${baseline!.version}` : 'no baseline to compare with yet';
+  console.log(`version ${report.version}: ${rows.length} models, total ${kb(report.totalGzipBytes)} KB as downloaded (gzip, default level), ${delta}`);
 
   if (updateBaseline) {
     writeFileSync(baselinePath, `${JSON.stringify(report, null, 2)}\n`);

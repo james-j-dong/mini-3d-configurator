@@ -2,7 +2,7 @@
 import { createHash } from 'node:crypto';
 import { mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { brotliCompressSync } from 'node:zlib';
+import { gzipSync } from 'node:zlib';
 import type { BuiltProduct, ModelDef, ModelFiles, Product, SlotDef, SourceDef } from '../schema/product.ts';
 import { possibleModels, validateProduct } from '../schema/validate.ts';
 import { configurationKey } from '../schema/configurations.ts';
@@ -14,8 +14,11 @@ import { readAtDetail, type DetailLevel } from './tessellate.ts';
 
 export { ConvertError } from './parts.ts';
 
-/** Brotli sizes per model id at the default level. */
-export interface SizeReport { version: string; brotliBytes: Record<string, number>; totalBrotliBytes: number }
+/**
+ * Download sizes per model id at the default level: the gzip copy of each part, which is what the
+ * viewer fetches (see partFiles).
+ */
+export interface SizeReport { version: string; gzipBytes: Record<string, number>; totalGzipBytes: number }
 
 /** When a model is needed: in every configuration's first view, only in some configurations, or after the first view. */
 export type ModelGroup = 'alwaysShown' | 'variants' | 'afterFirstView';
@@ -24,11 +27,13 @@ export type ModelGroup = 'alwaysShown' | 'variants' | 'afterFirstView';
 export interface ModelRow {
   model: string;
   group: ModelGroup;
+  /** How many of the source file's bodies were merged into this model. */
+  bodies: number;
   triangles: number;
   droppedTriangles: number;
   simplifiedTriangles: number;
-  brotliBytes: number;
-  lightBrotliBytes: number;
+  gzipBytes: number;
+  lightGzipBytes: number;
 }
 
 /** OpenCascade returns millimetres for every source (see occt.ts). */
@@ -62,8 +67,8 @@ export function lookFingerprint(dir: string): string {
 
 /** Growth against the stored baseline; flagged when the total grew by more than 10%. */
 export function compareWithBaseline(report: SizeReport, baseline: SizeReport | null): { deltaRatio: number; flagged: boolean } {
-  if (!baseline || baseline.totalBrotliBytes <= 0) return { deltaRatio: 0, flagged: false };
-  const deltaRatio: number = (report.totalBrotliBytes - baseline.totalBrotliBytes) / baseline.totalBrotliBytes;
+  if (!baseline || !(baseline.totalGzipBytes > 0)) return { deltaRatio: 0, flagged: false }; // none, or one that measured something else
+  const deltaRatio: number = (report.totalGzipBytes - baseline.totalGzipBytes) / baseline.totalGzipBytes;
   return { deltaRatio, flagged: deltaRatio > GROWTH_LIMIT };
 }
 
@@ -110,6 +115,17 @@ async function buildModelBody(
   return { body, droppedTriangles, simplifiedTriangles: removedTriangles };
 }
 
+const GZIP_LEVEL: number = 9;
+
+/**
+ * The files published for one part: the GLB, and a gzip copy the viewer downloads where the
+ * browser can unpack it. The CDN serves .glb uncompressed (the type is not on its list), and gzip
+ * takes about a third off a meshopt-compressed part.
+ */
+export function partFiles(name: string, glb: Uint8Array): Array<[path: string, bytes: Uint8Array]> {
+  return [[`parts/${name}.glb`, glb], [`parts/${name}.glb.gz`, gzipSync(glb, { level: GZIP_LEVEL })]];
+}
+
 const writeFile = (path: string, data: string | Uint8Array): void => {
   mkdirSync(join(path, '..'), { recursive: true });
   writeFileSync(path, data);
@@ -117,7 +133,7 @@ const writeFile = (path: string, data: string | Uint8Array): void => {
 
 /**
  * Converts every model of the product in `productDir` at both quality levels and writes:
- * - `<publicDir>/bundles/<id>/<version>/product.json` (a BuiltProduct) and `parts/*.glb`;
+ * - `<publicDir>/bundles/<id>/<version>/product.json` (a BuiltProduct), `parts/*.glb` and their gzip copies `parts/*.glb.gz`;
  * - `<publicDir>/products/<id>.json`, the pointer to the current version.
  * Sources are converted one after another; parallel worker threads can come when inputs get large.
  */
@@ -128,18 +144,20 @@ export async function convertProduct(productDir: string, publicDir: string, onMo
   const groups: Record<ModelGroup, string[]> = groupModels(product);
   const groupOf = (id: string): ModelGroup => (Object.keys(groups) as ModelGroup[]).find(g => groups[g].includes(id))!;
   for (const [modelId] of convertedModels(product)) {
-    rows.set(modelId, { model: modelId, group: groupOf(modelId), triangles: 0, droppedTriangles: 0, simplifiedTriangles: 0, brotliBytes: 0, lightBrotliBytes: 0 });
+    rows.set(modelId, { model: modelId, group: groupOf(modelId), bodies: 0, triangles: 0, droppedTriangles: 0, simplifiedTriangles: 0, gzipBytes: 0, lightGzipBytes: 0 });
   }
 
   for (const [key, source] of Object.entries(product.sources) as Array<[string, SourceDef]>) {
     // One coarse read finds the parts and their sizes; every body must be claimed exactly once.
     const reference: StepFile = await readStepFile(source.file, REFERENCE_TOLERANCE);
     const models: Array<[string, ConvertedModel]> = convertedModels(product).filter(([, m]) => m.source === key);
-    const claims: Map<string, number[]> = claimBodies(key, indexParts(reference, source.upAxis), models.map(([id, m]) => ({ id, parts: m.parts })), source.leaveOut ?? []);
+    const claims: Map<string, number[]> = claimBodies(key, indexParts(reference, source.upAxis), models.map(([id, m]) => ({ id, parts: m.parts })), source.leaveOut ?? [], source.bodyCount);
+    for (const [modelId, bodies] of claims) rows.get(modelId)!.bodies = bodies.length;
     const claimed: number[] = [...claims.values()].flat().sort((a, b) => a - b);
 
     for (const level of ['default', 'light'] as const) {
-      // Left-out bodies are never read at their own fine tolerance.
+      // Only the claimed bodies decide which tolerances get a read, so a left-out part never adds one.
+      // (Every read still meshes the whole file: see readAtDetail.)
       const file: StepFile = await readAtDetail(source.file, reference, level, claimed);
       for (const [modelId, model] of models) {
         const bodies: StepBody[] = claims.get(modelId)!.map(b => normaliseAxes(file.bodies[b], source.upAxis));
@@ -147,15 +165,12 @@ export async function convertProduct(productDir: string, publicDir: string, onMo
         // Face rules and simplification work in the file's frame; the placement comes last.
         const placed: StepBody = source.placement ? placeBody(body, source.placement) : body;
         const glb: Uint8Array = await writeGlb(placed, METRES_PER_MM);
-        const brotli: number = brotliCompressSync(glb).length;
+        const name: string = level === 'default' ? modelId : `${modelId}.light`;
+        glbs.set(name, glb);
+        const gzipBytes: number = partFiles(name, glb)[1][1].length;
         const row: ModelRow = rows.get(modelId)!;
-        if (level === 'default') {
-          glbs.set(modelId, glb);
-          Object.assign(row, { triangles: body.indices.length / 3, droppedTriangles, simplifiedTriangles, brotliBytes: brotli });
-        } else {
-          glbs.set(`${modelId}.light`, glb);
-          row.lightBrotliBytes = brotli;
-        }
+        if (level === 'default') Object.assign(row, { triangles: body.indices.length / 3, droppedTriangles, simplifiedTriangles, gzipBytes });
+        else row.lightGzipBytes = gzipBytes;
       }
     }
   }
@@ -164,18 +179,20 @@ export async function convertProduct(productDir: string, publicDir: string, onMo
   const version: string = computeVersion(`${settingsJson}\nlook:${lookFingerprint(LOOK_SOURCES_DIR)}`, [...glbs.entries()]);
   const files: Record<string, ModelFiles> = {};
   for (const [modelId] of convertedModels(product)) files[modelId] = { default: `parts/${modelId}.glb`, light: `parts/${modelId}.light.glb` };
-  const built: BuiltProduct = { ...product, version, files, stills: { pattern: 'stills/{key}.webp', sizePx: STILL_SIZE_PX } };
+  const built: BuiltProduct = { ...product, version, files, gzipParts: true, stills: { pattern: 'stills/{key}.webp', sizePx: STILL_SIZE_PX } };
 
   const bundle: string = `bundles/${product.id}/${version}/`;
-  for (const [name, bytes] of glbs) writeFile(join(publicDir, bundle, 'parts', `${name}.glb`), bytes);
+  for (const [name, glb] of glbs) {
+    for (const [path, bytes] of partFiles(name, glb)) writeFile(join(publicDir, bundle, path), bytes);
+  }
   writeFile(join(publicDir, bundle, 'product.json'), JSON.stringify(built, null, 2));
   const pointer = { version, bundle, defaultStill: `${bundle}stills/${configurationKey(product, product.defaultSelection)}.webp` };
   writeFile(join(publicDir, 'products', `${product.id}.json`), JSON.stringify(pointer, null, 2));
 
-  const brotliBytes: Record<string, number> = {};
+  const gzipBytes: Record<string, number> = {};
   for (const row of rows.values()) {
-    brotliBytes[row.model] = row.brotliBytes;
+    gzipBytes[row.model] = row.gzipBytes;
     onModel?.(row);
   }
-  return { version, brotliBytes, totalBrotliBytes: Object.values(brotliBytes).reduce((a, b) => a + b, 0) };
+  return { version, gzipBytes, totalGzipBytes: Object.values(gzipBytes).reduce((a, b) => a + b, 0) };
 }

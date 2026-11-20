@@ -1,3 +1,5 @@
+import { readFileSync, statSync } from 'node:fs';
+import { join } from 'node:path';
 import { expect, test, type Page } from '@playwright/test';
 
 type Selection = Record<string, string>;
@@ -128,11 +130,11 @@ function trackCriticalResponses(page: Page): { latestMs: () => number; seen: str
   const navigationStart: number = Date.now();
   let latest: number = 0;
   const seen: string[] = [];
-  const critical = (url: string): boolean => /\/v1\/loader\.js$|\/v1\/assets\/.+\.js$|\/product\.json$|\/products\/ob1\.json$|\/parts\/(housing|base|pad|usb-port|plate-screws|logo|stick|plate-6r-down|grommet-6r-down|knob-round)\.glb$/.test(new URL(url).pathname);
+  const critical = (url: string): boolean => /\/v1\/loader\.js$|\/v1\/assets\/.+\.js$|\/product\.json$|\/products\/ob1\.json$|\/parts\/(housing|base|pad|usb-port|plate-screws|logo|stick|plate-6r-down|grommet-6r-down|knob-round)\.glb(\.gz)?$/.test(new URL(url).pathname);
   page.on('requestfinished', request => {
     if (!critical(request.url())) return;
     const timing = request.timing();
-    seen.push(new URL(request.url()).pathname.split('/').pop()!);
+    seen.push(new URL(request.url()).pathname.split('/').pop()!.replace(/\.gz$/, '')); // parts come as <name>.glb.gz
     latest = Math.max(latest, timing.startTime + timing.responseEnd - navigationStart);
   });
   return { latestMs: (): number => latest, seen };
@@ -184,7 +186,7 @@ test('shows the viewer after being hidden, then rotated', async ({ page }) => { 
 
 test('keeps working when a part fails to download', async ({ page }) => {           // Review Focus 4
   allowedConsole = /knob-senna|Failed to load resource|net::ERR_FAILED|NS_ERROR|Load failed/i;
-  await page.route('**/parts/knob-senna*.glb', r => r.abort());
+  await page.route('**/parts/knob-senna*.glb*', r => r.abort());
   await page.goto('/'); await waitFor(page, 'ready');
   await pick(page, 'Shift Knob', 'Carbon Weave | Teardrop');
   expect(await nextError(page)).toEqual(expect.objectContaining({ fatal: false, reason: expect.stringContaining('knob-senna') }));
@@ -215,7 +217,7 @@ test('first parts arrive within 5 s on slow 4G', async ({ page, browserName }) =
   expect(lastCriticalResponseEndMs()).toBeLessThan(5000);                         // loader, viewer chunks, product.json, current GLBs
 });
 
-const AFTER_FIRST_VIEW: RegExp = /\/parts\/(board|bracket|springs|bearings|mechanism-screws|base-screws|mechanism-hardware|board-hardware)(\.light)?\.glb$/;
+const AFTER_FIRST_VIEW: RegExp = /\/parts\/(board|bracket|springs|bearings|mechanism-screws|base-screws|mechanism-hardware|board-hardware)(\.light)?\.glb(\.gz)?$/;
 
 test('after-first-view parts neither delay the first view or picks nor compile new shaders', async ({ page }) => {   // Review Focus 1
   const release = await holdRequests(page, AFTER_FIRST_VIEW);
@@ -230,7 +232,7 @@ test('after-first-view parts neither delay the first view or picks nor compile n
 
 test('an after-first-view part that fails is reported and blocks nothing', async ({ page }) => {   // Review Focus 2
   allowedConsole = /bearings|Failed to load resource|net::ERR_FAILED|NS_ERROR|Load failed/i;
-  await page.route('**/parts/bearings*.glb', r => r.abort());
+  await page.route('**/parts/bearings*.glb*', r => r.abort());
   await page.goto('/'); await waitFor(page, 'ready');
   expect(await nextError(page)).toEqual(expect.objectContaining({ fatal: false, reason: expect.stringContaining('bearings') }));
   await waitForProgressComplete(page, 'deferred');
@@ -239,8 +241,8 @@ test('an after-first-view part that fails is reported and blocks nothing', async
 
 test('an after-first-view part that fails never drops a pick still waiting for its parts', async ({ page }) => {
   allowedConsole = /bearings|Failed to load resource|net::ERR_FAILED|NS_ERROR|Load failed/i;
-  const failBearings = await holdThenFail(page, /\/parts\/bearings(\.light)?\.glb$/);
-  const releaseSenna = await holdRequests(page, /\/parts\/knob-senna(\.light)?\.glb$/);
+  const failBearings = await holdThenFail(page, /\/parts\/bearings(\.light)?\.glb(\.gz)?$/);
+  const releaseSenna = await holdRequests(page, /\/parts\/knob-senna(\.light)?\.glb(\.gz)?$/);
   await page.goto('/'); await waitFor(page, 'ready');
   await pick(page, 'Shift Knob', 'Carbon Weave | Teardrop');               // waits for its held knob
   failBearings();
@@ -380,4 +382,303 @@ test('a speed test asked for before the after-first-view parts are shown waits f
   // It could only have run after every after-first-view part was on screen.
   expect(await page.evaluate(() => (window as unknown as { __events: ViewerEvent[] }).__events
     .some(e => e.name === 'progress' && e.detail.phase === 'deferred' && e.detail.loaded === e.detail.total && (e.detail.total as number) > 0))).toBe(true);
+});
+
+// ---------- the 3D cannot start: the still stays and the page hears about it ----------
+
+/** The still image is on screen (not faded out) and has a picture to show. */
+const stillShown = (page: Page): Promise<boolean> => page.evaluate(() => {
+  const still = document.querySelector('mini3d-viewer')!.shadowRoot!.querySelector('img.still') as HTMLImageElement;
+  return !still.classList.contains('gone') && still.src !== '';
+});
+
+/** Makes the engine's texture generation throw: an unexpected failure in the middle of start-up. */
+const BREAK_TEXTURES: string = `for (const C of [globalThis.OffscreenCanvasRenderingContext2D, globalThis.CanvasRenderingContext2D]) {
+  if (C) C.prototype.getImageData = () => { throw new Error('boom'); };
+}`;
+
+/** Serves the render worker's script with `code` added in front. */
+async function addToWorkerScript(page: Page, code: string): Promise<void> {
+  await page.route('**/v1/assets/worker-*.js', async route => {
+    const response = await route.fetch();
+    await route.fulfill({ response, body: `${code}\n${await response.text()}` });
+  });
+}
+
+test('the 3D starts in a browser without OffscreenCanvas', async ({ page }) => {
+  await page.addInitScript(() => {
+    delete (window as unknown as { OffscreenCanvas?: unknown }).OffscreenCanvas;
+    delete (HTMLCanvasElement.prototype as unknown as { transferControlToOffscreen?: unknown }).transferControlToOffscreen;
+  });
+  await page.goto('/'); await waitFor(page, 'ready', 20_000);
+});
+
+for (const path of ['main', 'worker'] as const) {
+  test(`an engine that throws while starting (${path} thread) reports a fatal error and leaves the still up`, async ({ page, browserName }) => {
+    test.skip(path === 'worker' && browserName === 'webkit', 'WebKit renders on the main thread');
+    if (path === 'main') await page.addInitScript(BREAK_TEXTURES);
+    else await addToWorkerScript(page, BREAK_TEXTURES);
+    await page.goto(path === 'main' ? '/?render=main' : '/');
+    const error = await waitFor(page, 'error', 20_000);
+    expect(error.fatal).toBe(true);
+    expect(error.reason).toMatch(/^engine-failed: /);
+    expect(await stillShown(page)).toBe(true);
+    await pick(page, 'Shift Pattern', '7+R'); // the page keeps working, with stills
+    expect((await waitFor(page, 'configurationchange')).selection).toMatchObject({ 'Shift Pattern': '7+R' });
+  });
+}
+
+test('engine code that fails to download reports a fatal error and leaves the still up', async ({ page }) => {
+  allowedConsole = /engine-|Failed to load|ERR_FAILED|NetworkError|module script|dynamically imported module|Importing a module script failed/i;
+  await page.route('**/v1/assets/engine-*.js', route => route.abort());
+  await page.goto('/?render=main');
+  const error = await waitFor(page, 'error', 20_000);
+  expect(error.fatal).toBe(true);
+  expect(error.reason).toMatch(/^engine-load-failed: /);
+  expect(await stillShown(page)).toBe(true);
+});
+
+test('a render worker that fails after it has started reports a fatal error and leaves the still up', async ({ page, browserName }) => {
+  test.skip(browserName === 'webkit', 'WebKit renders on the main thread');
+  allowedConsole = /late failure/;
+  await addToWorkerScript(page, `setTimeout(() => { throw new Error('late failure'); }, 4000);`);
+  await page.goto('/'); await waitFor(page, 'ready');
+  const error = await waitFor(page, 'error', 20_000);
+  expect(error.fatal).toBe(true);
+  expect(error.reason).toMatch(/^engine-failed: /);
+  expect(await stillShown(page)).toBe(true);
+});
+
+test('the loader\'s still goes once the viewer\'s own still is up, so an early pick never shows two stills', async ({ page }) => {
+  const releaseParts: () => void = await holdRequests(page, /\/parts\/[^/]+\.glb(\.gz)?$/); // the 3D stays unready throughout
+  const releaseCode: () => void = await holdRequests(page, /\/v1\/assets\//);
+  await gotoEmbedPage(page);
+  await expect(page.locator('mini3d-viewer[data-loader-still]')).toBeAttached(); // loader.js has painted the default still
+  releaseCode();
+  await waitFor(page, 'productload');
+  await page.waitForFunction(() => {
+    const still = document.querySelector('mini3d-viewer')!.shadowRoot!.querySelector('img.still') as HTMLImageElement;
+    return still.complete && still.naturalWidth > 0; // the viewer's own copy of the still is showing
+  });
+  await expect(page.locator('mini3d-viewer:not([data-loader-still])')).toBeAttached({ timeout: 5_000 });
+  expect(await page.evaluate(() => (document.querySelector('mini3d-viewer') as HTMLElement).style.background)).toBe('');
+
+  // An early pick now swaps the only still there is.
+  await page.evaluate(() => (document.querySelector('mini3d-viewer') as unknown as { setConfiguration(s: Record<string, string>): void })
+    .setConfiguration({ 'Shift Knob': 'Carbon Forged | Teardrop' }));
+  await page.waitForFunction(() => {
+    const still = document.querySelector('mini3d-viewer')!.shadowRoot!.querySelector('img.still') as HTMLImageElement;
+    return still.complete && still.naturalWidth > 0 && !/4-0-0/.test(still.src);
+  });
+  releaseParts();
+  await waitFor(page, 'ready');
+});
+
+// ---------- the picker while a pick is still waiting for its parts ----------
+
+/** The value whose button is pressed in that option's group. */
+const pressed = (page: Page, option: string): Promise<string | null> =>
+  page.locator(`button[data-option="${option}"][aria-pressed="true"]`).getAttribute('data-value');
+
+const requestedConfiguration = (page: Page): Promise<Selection> =>
+  page.evaluate(() => (document.querySelector('mini3d-viewer') as unknown as { requestedConfiguration: Record<string, string> }).requestedConfiguration);
+
+test('a second pick does not un-press a pick still waiting for its parts', async ({ page }) => {
+  const releaseSenna = await holdRequests(page, /\/parts\/knob-senna(\.light)?\.glb(\.gz)?$/);
+  await page.goto('/'); await waitFor(page, 'ready');
+  await pick(page, 'Shift Knob', 'Carbon Weave | Teardrop');   // waits for its held knob
+  await pick(page, 'Shift Plate Style', 'Forged Carbon');
+  expect(await pressed(page, 'Shift Knob')).toBe('Carbon Weave | Teardrop');
+  expect(await pressed(page, 'Shift Plate Style')).toBe('Forged Carbon');
+  // The viewer says both what was asked for and what is on screen.
+  expect(await requestedConfiguration(page)).toEqual({ ...DEFAULT, 'Shift Knob': 'Carbon Weave | Teardrop', 'Shift Plate Style': 'Forged Carbon' });
+  expect(await configuration(page)).toEqual(DEFAULT);
+  releaseSenna();
+  await waitFor(page, 'configurationchange');
+  expect(await pressed(page, 'Shift Knob')).toBe('Carbon Weave | Teardrop');
+  expect(await configuration(page)).toEqual(await requestedConfiguration(page));
+});
+
+test('an after-first-view part that fails does not un-press a pick still waiting for its parts', async ({ page }) => {
+  allowedConsole = /bearings|Failed to load resource|net::ERR_FAILED|NS_ERROR|Load failed/i;
+  const failBearings = await holdThenFail(page, /\/parts\/bearings(\.light)?\.glb(\.gz)?$/);
+  const releaseSenna = await holdRequests(page, /\/parts\/knob-senna(\.light)?\.glb(\.gz)?$/);
+  await page.goto('/'); await waitFor(page, 'ready');
+  await pick(page, 'Shift Knob', 'Carbon Weave | Teardrop');
+  failBearings();
+  expect(await nextError(page)).toEqual(expect.objectContaining({ fatal: false, reason: expect.stringContaining('bearings') }));
+  expect(await pressed(page, 'Shift Knob')).toBe('Carbon Weave | Teardrop'); // the pick is still on its way
+  releaseSenna();
+  await waitFor(page, 'configurationchange');
+  expect(await pressed(page, 'Shift Knob')).toBe('Carbon Weave | Teardrop');
+});
+
+test('a pick whose part fails to download goes back to the button for what is on screen', async ({ page }) => {
+  allowedConsole = /knob-senna|Failed to load resource|net::ERR_FAILED|NS_ERROR|Load failed/i;
+  await page.route('**/parts/knob-senna*.glb*', r => r.abort());
+  await page.goto('/'); await waitFor(page, 'ready');
+  await pick(page, 'Shift Knob', 'Carbon Weave | Teardrop');
+  expect(await nextError(page)).toEqual(expect.objectContaining({ fatal: false, reason: expect.stringContaining('knob-senna') }));
+  expect(await pressed(page, 'Shift Knob')).toBe('Carbon Weave | Round');
+  expect(await requestedConfiguration(page)).toEqual(DEFAULT);
+});
+
+test('compiles only the shader programs the product can use', async ({ page }) => {
+  // OB1 needs six: carbon weave at full quality (clear coat + weave normals), forged carbon at full
+  // quality (clear coat), both carbons at lean quality (one shared program), metal, matte, and the
+  // contact shadow. Each one costs tens of milliseconds before the first view.
+  const release = await holdRequests(page, AFTER_FIRST_VIEW); // the internal parts' slots are still empty at `ready`
+  await page.goto('/?stats'); await waitFor(page, 'ready');
+  expect((await debugInfo(page)).programs).toBe(6);
+  release();
+  await waitForBackgroundLoad(page);
+  expect((await debugInfo(page)).programs).toBe(6); // and showing every part adds none
+});
+
+// ---------- leaving the page ----------
+
+/** Records every WebGL2 context the page creates, so a test can ask whether any is still alive. */
+async function recordContexts(page: Page): Promise<void> {
+  await page.addInitScript(() => {
+    const contexts: WebGL2RenderingContext[] = [];
+    (window as unknown as { __contexts: WebGL2RenderingContext[] }).__contexts = contexts;
+    const getContext = HTMLCanvasElement.prototype.getContext as (this: HTMLCanvasElement, type: string, options?: unknown) => unknown;
+    HTMLCanvasElement.prototype.getContext = function (this: HTMLCanvasElement, type: string, options?: unknown): unknown {
+      const context: unknown = getContext.call(this, type, options);
+      if (type === 'webgl2' && context && !contexts.includes(context as WebGL2RenderingContext)) contexts.push(context as WebGL2RenderingContext);
+      return context;
+    } as typeof HTMLCanvasElement.prototype.getContext;
+  });
+}
+const liveContexts = (page: Page): Promise<number> =>
+  page.evaluate(() => (window as unknown as { __contexts: WebGL2RenderingContext[] }).__contexts.filter(c => !c.isContextLost()).length);
+
+const removeViewer = (page: Page): Promise<void> => page.evaluate(() => {
+  const viewer = document.querySelector('mini3d-viewer')!;
+  (window as unknown as { __viewer: Element }).__viewer = viewer; // the page may put it back
+  viewer.remove();
+});
+
+test('removing the viewer from the page releases its WebGL context (main thread)', async ({ page }) => {
+  await recordContexts(page);
+  await page.goto('/?render=main'); await waitFor(page, 'ready');
+  expect(await liveContexts(page)).toBe(1);
+  await removeViewer(page);
+  await expect.poll(() => liveContexts(page)).toBe(0);
+});
+
+test('removing the viewer from the page stops its render worker', async ({ page, browserName }) => {
+  test.skip(browserName === 'webkit', 'WebKit renders on the main thread');
+  await page.goto('/'); await waitFor(page, 'ready');
+  expect(page.workers().length).toBe(1);
+  await removeViewer(page);
+  await expect.poll(() => page.workers().length).toBe(0);
+});
+
+test('a fatal error on the main thread releases the WebGL context', async ({ page }) => {
+  await recordContexts(page);
+  await page.addInitScript(BREAK_TEXTURES);
+  await page.goto('/?render=main');
+  expect((await waitFor(page, 'error', 20_000)).fatal).toBe(true);
+  await expect.poll(() => liveContexts(page)).toBe(0);
+});
+
+test('moving the viewer within the page keeps it running', async ({ page }) => {
+  await recordContexts(page);
+  await page.goto('/?render=main'); await waitFor(page, 'ready');
+  await page.evaluate(() => {
+    const viewer = document.querySelector('mini3d-viewer')!;
+    const wrapper: HTMLDivElement = document.createElement('div');
+    wrapper.style.cssText = 'width:100%;height:100%';
+    viewer.parentElement!.append(wrapper);
+    wrapper.append(viewer); // leaves the page and comes back in the same task
+  });
+  await page.waitForTimeout(300);
+  expect(await liveContexts(page)).toBe(1);
+  await pick(page, 'Shift Pattern', '7+R');
+  expect((await waitFor(page, 'configurationchange')).selection).toMatchObject({ 'Shift Pattern': '7+R' });
+});
+
+test('a viewer put back on the page starts again and shows the same configuration', async ({ page }) => {
+  await page.goto('/'); await waitFor(page, 'ready');
+  await pick(page, 'Shift Pattern', '7+R'); await waitFor(page, 'configurationchange');
+  const stage = await page.evaluateHandle(() => document.querySelector('mini3d-viewer')!.parentElement!);
+  await removeViewer(page);
+  await page.waitForTimeout(300);
+  await page.evaluate(parent => parent.append((window as unknown as { __viewer: Element }).__viewer), stage);
+  await waitFor(page, 'ready', 30_000); // a second `ready`: the 3D started again
+  await expect.poll(async () => (await configuration(page))['Shift Pattern']).toBe('7+R');
+  await pick(page, 'Shift Knob', 'Aluminum | Blue');
+  expect((await waitFor(page, 'configurationchange')).selection).toMatchObject({ 'Shift Knob': 'Aluminum | Blue', 'Shift Pattern': '7+R' });
+});
+
+test('a pick made before the 3D starts is what the 3D opens with', async ({ page }) => {
+  await page.addInitScript(() => {
+    const w = window as unknown as { __atReady: Record<string, string> | null };
+    w.__atReady = null;
+    type Viewer = HTMLElement & { configuration: Record<string, string>; setConfiguration(s: Record<string, string>): void };
+    // As a store page would: tell the viewer the shopper's variant the moment the element exists.
+    void customElements.whenDefined('mini3d-viewer').then(() => (document.querySelector('mini3d-viewer') as Viewer).setConfiguration({ 'Shift Pattern': '7+R' }));
+    document.addEventListener('ready', e => { w.__atReady = { ...(e.target as Viewer).configuration }; }, true);
+  });
+  await page.goto('/'); await waitFor(page, 'ready');
+  expect(await page.evaluate(() => (window as unknown as { __atReady: Record<string, string> }).__atReady)).toEqual({ ...DEFAULT, 'Shift Pattern': '7+R' });
+  expect(await pressed(page, 'Shift Pattern')).toBe('7+R');
+});
+
+// ---------- part downloads ----------
+
+/** The file name of every part download, in order. */
+function trackPartDownloads(page: Page): string[] {
+  const names: string[] = [];
+  page.on('request', request => {
+    const path: string = new URL(request.url()).pathname;
+    if (path.includes('/parts/')) names.push(path.split('/').pop()!);
+  });
+  return names;
+}
+
+/** The folder of the bundle the site currently points at, on disk. */
+function currentBundleDir(): string {
+  const pointer = JSON.parse(readFileSync('public/products/ob1.json', 'utf8')) as { bundle: string };
+  return join('public', pointer.bundle);
+}
+
+test('parts are downloaded as their gzip copies, about a third smaller', async ({ page }) => {
+  const names: string[] = trackPartDownloads(page);
+  await page.goto('/'); await waitFor(page, 'ready');
+  await waitForBackgroundLoad(page);
+  expect(names.length).toBeGreaterThan(10);
+  expect(names.filter(name => !name.endsWith('.glb.gz'))).toEqual([]);
+  // And each copy really is smaller than the file it replaces.
+  const parts: string = join(currentBundleDir(), 'parts');
+  const size = (name: string): number => statSync(join(parts, name)).size;
+  const downloaded: number = names.reduce((sum, name) => sum + size(name), 0);
+  const plain: number = names.reduce((sum, name) => sum + size(name.replace(/\.gz$/, '')), 0);
+  expect(downloaded).toBeLessThan(plain * 0.75);
+});
+
+test('gzip copies served as plain files, the way a CDN serves them, are unpacked by the viewer', async ({ page }) => {
+  // The local test server marks .gz files `Content-Encoding: gzip`, so the browser unpacks them and the
+  // viewer never has to. A CDN serves them as ordinary gzip files: this serves them that way.
+  const parts: string = join(currentBundleDir(), 'parts');
+  let served: number = 0;
+  await page.route(/\/parts\/[^/]+\.glb\.gz$/, async route => {
+    served++;
+    const name: string = new URL(route.request().url()).pathname.split('/').pop()!;
+    await route.fulfill({ status: 200, contentType: 'application/gzip', headers: { 'access-control-allow-origin': '*' }, body: readFileSync(join(parts, name)) });
+  });
+  await page.goto('/'); await waitFor(page, 'ready');
+  await waitForBackgroundLoad(page);
+  expect(served).toBeGreaterThan(10);
+  await pick(page, 'Shift Knob', 'Carbon Weave | Teardrop');
+  expect((await waitFor(page, 'configurationchange')).selection).toMatchObject({ 'Shift Knob': 'Carbon Weave | Teardrop' });
+});
+
+test('a browser that cannot unpack gzip downloads the plain parts', async ({ page }) => {
+  await page.addInitScript(() => { delete (window as unknown as { DecompressionStream?: unknown }).DecompressionStream; });
+  const names: string[] = trackPartDownloads(page);
+  await page.goto('/?render=main'); await waitFor(page, 'ready'); // the main thread, where the page's globals are the engine's
+  expect(names.length).toBeGreaterThan(5);
+  expect(names.filter(name => !name.endsWith('.glb'))).toEqual([]);
 });

@@ -45,6 +45,8 @@ export class OrbitController {
   private coasting: boolean = false;
   /** The current drag's recent points, oldest first: the last 80 ms and one point before that. */
   private dragPoints: DragPoint[] = [];
+  /** Reused every frame by apply(), so moving the camera allocates nothing. */
+  private readonly offset: Vector3 = new Vector3();
 
   constructor(framing: Framing) {
     this.framing = framing;
@@ -152,7 +154,7 @@ export class OrbitController {
   get isCoasting(): boolean { return this.coasting; }
 
   apply(camera: PerspectiveCamera): void {
-    camera.position.copy(this.target).add(this.offsetFromTarget());
+    camera.position.copy(this.target).add(this.offsetFromTarget(this.offset));
     camera.up.copy(WORLD_UP);
     camera.lookAt(this.target);
     camera.fov = this.framing.fovDeg;
@@ -162,14 +164,15 @@ export class OrbitController {
     camera.updateProjectionMatrix();
   }
 
-  private offsetFromTarget(): Vector3 {
+  /** The camera's position relative to the target, written into `out`. */
+  private offsetFromTarget(out: Vector3): Vector3 {
     const s: number = Math.sin(this.pol);
-    return new Vector3(s * Math.sin(this.az), Math.cos(this.pol), s * Math.cos(this.az)).multiplyScalar(this.dist);
+    return out.set(s * Math.sin(this.az), Math.cos(this.pol), s * Math.cos(this.az)).multiplyScalar(this.dist);
   }
 
   /** The camera's right and up vectors in world space. */
   private basis(): { right: Vector3; up: Vector3 } {
-    const forward: Vector3 = this.offsetFromTarget().negate().normalize();
+    const forward: Vector3 = this.offsetFromTarget(new Vector3()).negate().normalize();
     const right: Vector3 = new Vector3().crossVectors(forward, WORLD_UP).normalize();
     const up: Vector3 = new Vector3().crossVectors(right, forward).normalize();
     return { right, up };

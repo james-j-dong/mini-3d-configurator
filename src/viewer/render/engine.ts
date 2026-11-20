@@ -13,11 +13,12 @@ import type { DebugInfo, FromEngine, QualityLevel, SpeedTestResult, ToEngine } f
 import { resolveAssembly } from './assembly.ts';
 import { OrbitController } from './orbit.ts';
 import { makeFinishTextures, type FinishTextures } from './textures.ts';
-import { createMaterials, type QualityTier } from './materials.ts';
+import { createMaterialTiers, type QualityTier } from './materials.ts';
 import { createStudio, ENVIRONMENT_INTENSITY, shadowPlacement, type Studio } from './studio.ts';
 import { deferredModelsOf, LoadPlanner, requiredModelsOf, SwapScheduler, type PartState, type SwapStep } from './scheduler.ts';
 import { DisplayInterval, FrameIntervals, QualityGovernor } from './governor.ts';
 import { warmDraw, warmUp } from './warmup.ts';
+import { canGunzip, gunzipIfGzip } from './gunzip.ts';
 
 type RenderCanvas = HTMLCanvasElement | OffscreenCanvas;
 
@@ -129,6 +130,13 @@ export class Engine {
   private ready: boolean = false;
   private visible: boolean = true;
   private contextLost: boolean = false;
+  /** Something threw that nothing expected: the engine has stopped and said so. */
+  private failed: boolean = false;
+  /** dispose() was called: nothing runs, nothing is sent, the WebGL context is gone. */
+  private disposed: boolean = false;
+  private statsTimer: ReturnType<typeof setInterval> | null = null;
+  /** Cancels the downloads still in flight when the engine is disposed. */
+  private readonly downloads: AbortController = new AbortController();
   private simulatedLoss: boolean = false;
   private dirty: boolean = false;
   private tickQueued: boolean = false;
@@ -151,23 +159,66 @@ export class Engine {
 
   constructor(canvas: HTMLCanvasElement | OffscreenCanvas, emit: (m: FromEngine) => void, renderPath: 'worker' | 'main') {
     this.canvas = canvas;
-    this.emit = emit;
+    this.emit = (m: FromEngine): void => { if (!this.disposed) emit(m); };
     this.renderPath = renderPath;
   }
 
   handle(m: ToEngine): void {
+    this.guard(() => this.dispatch(m));
+  }
+
+  private dispatch(m: ToEngine): void | Promise<void> {
     switch (m.type) {
-      case 'init': void this.init(m); break;
-      case 'resize': this.resize(m.widthCss, m.heightCss, m.dpr); break;
-      case 'pointer': this.onPointer(m.kind, m.id, m.x, m.y, m.tMs); break;
-      case 'wheel': this.onWheel(m.deltaY, m.x, m.y); break;
-      case 'configure': this.request(m.selection, true); break;
-      case 'visible': this.setVisible(m.visible); break;
-      case 'capture': void this.capture(m.id, m.sizePx); break;
-      case 'speedTest': this.startSpeedTest(m.id); break;
-      case 'debug': this.emit({ type: 'debugInfo', id: m.id, info: this.debugInfo() }); break;
-      case 'loseContext': this.loseContext(); break;
+      case 'init': return this.init(m);
+      case 'resize': return this.resize(m.widthCss, m.heightCss, m.dpr);
+      case 'pointer': return this.onPointer(m.kind, m.id, m.x, m.y, m.tMs);
+      case 'wheel': return this.onWheel(m.deltaY, m.x, m.y);
+      case 'configure': return this.request(m.selection, true);
+      case 'visible': return this.setVisible(m.visible);
+      case 'capture': return this.capture(m.id, m.sizePx);
+      case 'speedTest': return this.startSpeedTest(m.id);
+      case 'debug': return this.emit({ type: 'debugInfo', id: m.id, info: this.debugInfo() });
+      case 'loseContext': return this.loseContext();
     }
+  }
+
+  // ---------- unexpected failures ----------
+  // Failures the engine expects (no WebGL2, a part that won't download) are reported where they
+  // happen. Anything else that throws, now or in a later task, ends up here: without this the
+  // viewer would sit on its still for ever with no `ready` and no `error`.
+
+  /** Runs a piece of engine work; if it throws or its promise rejects, the engine fails. */
+  private guard(work: () => void | Promise<void>): void {
+    if (this.failed || this.disposed) return;
+    try {
+      const pending: void | Promise<void> = work();
+      if (pending) pending.catch((error: unknown) => this.fail(error));
+    } catch (error) {
+      this.fail(error);
+    }
+  }
+
+  /** Stops the engine and tells the element, which goes back to the still. */
+  private fail(error: unknown): void {
+    if (this.failed) return;
+    this.failed = true;
+    this.emit({ type: 'error', reason: `engine-failed: ${error instanceof Error ? error.message : String(error)}`, fatal: true });
+  }
+
+  /**
+   * Stops everything and releases the WebGL context with all its GPU memory, at once rather than
+   * whenever the browser collects the canvas. Only the main-thread path needs it: a render worker
+   * is simply terminated. The engine cannot be used again.
+   */
+  dispose(): void {
+    if (this.disposed) return;
+    this.disposed = true;
+    this.downloads.abort();
+    if (this.statsTimer !== null) clearInterval(this.statsTimer);
+    this.canvas.removeEventListener('webglcontextlost', this.onContextLost as EventListener);
+    this.canvas.removeEventListener('webglcontextrestored', this.onContextRestored as EventListener);
+    this.renderer?.dispose();
+    this.renderer?.forceContextLoss();
   }
 
   // ---------- start-up ----------
@@ -200,7 +251,7 @@ export class Engine {
 
     let product: BuiltProduct;
     try {
-      const response: Response = await fetch(this.productUrl);
+      const response: Response = await fetch(this.productUrl, { signal: this.downloads.signal });
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       product = validateProduct(await response.json()) as BuiltProduct;
       checkBuiltFiles(product);
@@ -209,17 +260,16 @@ export class Engine {
       return;
     }
     this.product = product;
-    this.emit({ type: 'product', product });
-    this.scheduler = new SwapScheduler(s => requiredModelsOf(product, s));
-    this.orbit = new OrbitController(product.framing);
-    for (const id of Object.keys(product.models)) this.models.set(id, { status: 'idle', warmed: false, local: new Matrix4() });
-
     let selection: Selection = product.defaultSelection;
     try {
       if (m.selection) selection = normaliseSelection(product, m.selection, product.defaultSelection);
     } catch {
       this.emit({ type: 'error', reason: 'invalid-selection: initial', fatal: false });
     }
+    this.emit({ type: 'product', product, selection });
+    this.scheduler = new SwapScheduler(s => requiredModelsOf(product, s));
+    this.orbit = new OrbitController(product.framing);
+    for (const id of Object.keys(product.models)) this.models.set(id, { status: 'idle', warmed: false, local: new Matrix4() });
 
     // The current configuration's parts first; after-first-view parts load once it's on screen.
     const currentModels: string[] = requiredModelsOf(product, selection);
@@ -242,22 +292,22 @@ export class Engine {
     this.orbit.apply(this.camera);
     this.installStudio(renderer); // sized from the shown parts; before the warm-up, so the shadow's shader is compiled in it
     await this.warmAll();
-    if (this.contextLost) return;
+    if (this.contextLost || this.disposed) return;
     this.render();
     this.ready = true;
     this.firstViewMs = performance.now() - this.initMs;
     this.emit({ type: 'ready' });
     this.emitDeferredProgress();
-    if (this.statsOn) setInterval(() => this.emitStats(), 1000);
+    if (this.statsOn) this.statsTimer = setInterval(() => this.emitStats(), 1000);
     if (this.scheduler.pending) this.request(this.scheduler.pending, this.emitOnApply);
-    void this.backgroundLoad();
+    this.guard(() => this.backgroundLoad());
     this.requestTick(); // nothing to draw yet: these first ticks time the display's refresh interval
   }
 
   /** Textures and both material tiers. */
   private buildLook(product: Product): void {
     this.textures = makeFinishTextures();
-    this.materials = { full: createMaterials(product, this.textures, 'full'), lean: createMaterials(product, this.textures, 'lean') };
+    this.materials = createMaterialTiers(product, this.textures);
   }
 
   /** The environment, key light and contact shadow, the shadow sized and placed from the shown parts' bounds. */
@@ -266,8 +316,7 @@ export class Engine {
       this.scene.remove(this.studio.shadow, this.studio.keyLight);
       this.studio.environment.dispose();
     }
-    const { footprintM, floorYM } = shadowPlacement(this.bounds);
-    this.studio = createStudio(renderer, footprintM, floorYM);
+    this.studio = createStudio(renderer, shadowPlacement(this.bounds));
     this.scene.environment = this.studio.environment;
     this.scene.environmentIntensity = ENVIRONMENT_INTENSITY;
     this.scene.add(this.studio.shadow, this.studio.keyLight as DirectionalLight);
@@ -286,13 +335,13 @@ export class Engine {
       mesh.name = slot.id;
       mesh.matrixAutoUpdate = false;
       if (slot.afterFirstView) mesh.renderOrder = AFTER_FIRST_VIEW_RENDER_ORDER;
-      this.slotMeshes.set(slot.id, mesh);
-      this.scene.add(mesh);
+      this.slotMeshes.set(slot.id, mesh); // it joins the scene when it has a part to show (applyConfiguration)
     }
   }
 
+  /** Every material of both tiers, each once (most finishes are one material shared by both). */
   private allMaterials(): Material[] {
-    return [...this.materials!.full.values(), ...this.materials!.lean.values()];
+    return [...new Set([...this.materials!.full.values(), ...this.materials!.lean.values()])];
   }
 
   private allTextures(): Texture[] {
@@ -316,13 +365,15 @@ export class Engine {
     if (state.inFlight) return state.inFlight;
     state.status = 'loading';
     const level: 'default' | 'light' = this.governor.levelIndex >= 2 ? 'light' : 'default';
-    const url: string = new URL(this.product!.files[id][level], this.productUrl).href;
+    // The gzip copy where the bundle has one and this browser can unpack it: about a third less to download.
+    const file: string = this.product!.files[id][level];
+    const url: string = new URL(this.product!.gzipParts === true && canGunzip() ? `${file}.gz` : file, this.productUrl).href;
     state.inFlight = (async (): Promise<void> => {
       for (let attempt = 0; attempt < 2; attempt++) {
         try {
-          const response: Response = await fetch(url);
+          const response: Response = await fetch(url, { signal: this.downloads.signal });
           if (!response.ok) throw new Error(`HTTP ${response.status}`);
-          const gltf: GLTF = await this.loader.parseAsync(await response.arrayBuffer(), url);
+          const gltf: GLTF = await this.loader.parseAsync(await gunzipIfGzip(await response.arrayBuffer()), url);
           gltf.scene.updateMatrixWorld(true);
           let found: Mesh | null = null;
           gltf.scene.traverse(o => { if (!found && (o as Mesh).isMesh) found = o as Mesh; });
@@ -400,10 +451,10 @@ export class Engine {
         return;
       }
       if (state.status === 'idle') {
-        void this.loadModel(id).then(() => {
+        this.guard(() => this.loadModel(id).then(() => {
           if (state.status === 'failed') this.failPendingPickIfItNeeds(id);
           else this.requestTick();
-        });
+        }));
       }
     }
     this.requestTick();
@@ -429,12 +480,15 @@ export class Engine {
       const mesh: Mesh = this.slotMeshes.get(slot.id)!;
       const { model, finish } = resolved[slot.id];
       const state: ModelState = this.models.get(model)!;
-      // The finish material is set even on a hidden slot: three compiles hidden meshes' materials too.
       mesh.material = this.materials![tier].get(finish)!;
       mesh.userData.finish = finish;
       // Required parts are always loaded and warmed by now; an after-first-view part waits until both.
       const shown: boolean = state.status === 'ready' && (slot.afterFirstView !== true || state.warmed);
-      mesh.visible = shown;
+      // A slot is in the scene only while it shows a part. Three compiles every mesh in the scene, hidden
+      // or not, and a waiting slot's placeholder shape has no normals: left in, each finish it might
+      // hold would cost one more shader program that nothing ever draws.
+      if (shown && mesh.parent === null) this.scene.add(mesh);
+      else if (!shown && mesh.parent !== null) this.scene.remove(mesh);
       if (!shown) continue;
       if (slot.afterFirstView) this.shownDeferred.add(model);
       mesh.geometry = state.geometry!;
@@ -478,6 +532,15 @@ export class Engine {
   }
 
   private readonly tick = (t: number): void => {
+    if (this.failed || this.disposed) return;
+    try {
+      this.frame(t);
+    } catch (error) {
+      this.fail(error);
+    }
+  };
+
+  private frame(t: number): void {
     this.tickQueued = false;
     if (!this.visible || this.contextLost || !this.ready) {
       this.frameIntervals.reset();
@@ -524,7 +587,7 @@ export class Engine {
     this.displayInterval.tick(t, draw);
     this.governor.displayMs = this.displayInterval.estimateMs ?? this.governor.displayMs;
     if (continues || this.displayInterval.wantsTick) this.requestTick();
-  };
+  }
 
   private render(): void {
     this.orbit!.apply(this.camera);
@@ -762,7 +825,7 @@ export class Engine {
 
   private emitStats(): void {
     const r: WebGLRenderer | null = this.renderer;
-    if (!r || this.contextLost) return;
+    if (!r || this.contextLost || this.failed) return;
     const size: Vector2 = r.getDrawingBufferSize(new Vector2());
     const frames: number[] = this.recentFrameMs.splice(0);
     const avg: number = frames.length ? frames.reduce((a, b) => a + b, 0) / frames.length : 0;
@@ -805,7 +868,7 @@ export class Engine {
 
   /** Three.js re-creates its GL state; the environment map (a render target) is redrawn, then everything is warmed again. */
   private readonly onContextRestored = (): void => {
-    void (async (): Promise<void> => {
+    this.guard(async (): Promise<void> => {
       if (!this.renderer || !this.product || !this.ready) {
         this.contextLost = false;
         return;
@@ -816,6 +879,7 @@ export class Engine {
       this.contextLost = false;
       this.applySize();
       await this.warmAll();
+      if (this.disposed) return;
       this.render();
       this.frameIntervals.reset();
       this.displayInterval.reset();
@@ -825,6 +889,6 @@ export class Engine {
         this.revealPending = true;
         this.requestTick();
       }
-    })();
+    });
   };
 }

@@ -91,6 +91,9 @@ function validateSources(sources: Json): void {
     string(s.file, `${path}.file`);
     oneOf(s.units, ['mm', 'm', 'in'] as const, `${path}.units`);
     oneOf(s.upAxis, ['y', 'z'] as const, `${path}.upAxis`);
+    if (s.bodyCount !== undefined && !(Number.isInteger(s.bodyCount) && (s.bodyCount as number) >= 1)) {
+      throw new ProductError(`${path}.bodyCount`, 'expected a whole number of at least 1');
+    }
     if (s.leaveOut !== undefined) array(s.leaveOut, `${path}.leaveOut`).forEach((sel, i) => validateSelection(sel, `${path}.leaveOut[${i}]`));
     if (s.placement !== undefined) validatePlacement(s.placement, `${path}.placement`);
   }

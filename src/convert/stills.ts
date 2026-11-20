@@ -73,7 +73,7 @@ export async function renderStills(productId: string, publicDir: string): Promis
       const events = (window as unknown as { __events: Array<{ name: string; detail: { phase?: string; loaded?: number; total?: number } }> }).__events;
       return events.some(e => e.name === 'progress' && e.detail.phase === 'deferred' && e.detail.loaded === e.detail.total);
     }, undefined, { timeout: READY_TIMEOUT_MS });
-    const failedPart = await page.evaluate(() => (window as unknown as { __events: Array<{ name: string; detail: { reason?: string } }> }).__events
+    const failedPart: string | undefined = await page.evaluate(() => (window as unknown as { __events: Array<{ name: string; detail: { reason?: string } }> }).__events
       .find(e => e.name === 'error' && e.detail.reason?.startsWith('model-load-failed'))?.detail.reason);
     if (failedPart) throw new Error(`a part failed to load, so the stills would be incomplete: ${failedPart}`);
 

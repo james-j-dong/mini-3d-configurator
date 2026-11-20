@@ -4,10 +4,10 @@ import type { BuiltProduct, Selection } from '../schema/product.ts';
 import type { FromEngine, SpeedTestResult } from '../viewer/protocol.ts';
 import { Engine } from '../viewer/render/engine.ts';
 
-const canvas = document.getElementById('view') as HTMLCanvasElement;
-const optionsEl = document.getElementById('options') as HTMLDivElement;
-const out = document.getElementById('out') as HTMLPreElement;
-const statsEl = document.getElementById('stats') as HTMLPreElement;
+const canvas: HTMLCanvasElement = document.getElementById('view') as HTMLCanvasElement;
+const optionsEl: HTMLDivElement = document.getElementById('options') as HTMLDivElement;
+const out: HTMLPreElement = document.getElementById('out') as HTMLPreElement;
+const statsEl: HTMLPreElement = document.getElementById('stats') as HTMLPreElement;
 
 let product: BuiltProduct | null = null;
 let selection: Selection = {};
@@ -24,20 +24,20 @@ function formatResult(r: SpeedTestResult): string {
 function renderButtons(): void {
   if (!product) return;
   optionsEl.replaceChildren(...product.options.map(option => {
-    const button = document.createElement('button');
+    const button: HTMLButtonElement = document.createElement('button');
     button.textContent = `${option.name}: ${selection[option.name]}`;
     button.addEventListener('click', () => {
-      const index = option.values.findIndex(v => v.name === selection[option.name]);
-      const next = option.values[(index + 1) % option.values.length].name;
+      const index: number = option.values.findIndex(v => v.name === selection[option.name]);
+      const next: string = option.values[(index + 1) % option.values.length].name;
       engine.handle({ type: 'configure', selection: { ...selection, [option.name]: next } });
     });
     return button;
   }));
 }
 
-const engine = new Engine(canvas, (m: FromEngine) => {
+const engine: Engine = new Engine(canvas, (m: FromEngine) => {
   switch (m.type) {
-    case 'product': product = m.product; selection = { ...m.product.defaultSelection }; renderButtons(); break;
+    case 'product': product = m.product; selection = { ...m.selection }; renderButtons(); break;
     case 'ready': out.textContent = 'ready'; break;
     case 'configured': selection = m.selection; renderButtons(); break;
     case 'progress': if (m.phase === 'background') out.textContent = `background ${m.loaded}/${m.total}`; break;
@@ -50,7 +50,7 @@ const engine = new Engine(canvas, (m: FromEngine) => {
 
 const pointer = (kind: 'down' | 'move' | 'up' | 'cancel') => (e: PointerEvent): void => {
   if (kind === 'down') canvas.setPointerCapture(e.pointerId);
-  const box = canvas.getBoundingClientRect();
+  const box: DOMRect = canvas.getBoundingClientRect();
   engine.handle({ type: 'pointer', kind, id: e.pointerId, x: e.clientX - box.left, y: e.clientY - box.top, tMs: e.timeStamp });
 };
 canvas.addEventListener('pointerdown', pointer('down'));
@@ -59,14 +59,14 @@ canvas.addEventListener('pointerup', pointer('up'));
 canvas.addEventListener('pointercancel', pointer('cancel'));
 canvas.addEventListener('wheel', e => {
   e.preventDefault();
-  const box = canvas.getBoundingClientRect();
+  const box: DOMRect = canvas.getBoundingClientRect();
   engine.handle({ type: 'wheel', deltaY: e.deltaY, x: e.clientX - box.left, y: e.clientY - box.top });
 }, { passive: false });
 new ResizeObserver(() => engine.handle({ type: 'resize', widthCss: canvas.clientWidth, heightCss: canvas.clientHeight, dpr: devicePixelRatio })).observe(canvas);
 document.addEventListener('visibilitychange', () => engine.handle({ type: 'visible', visible: !document.hidden }));
 document.getElementById('speed')!.addEventListener('click', () => { out.textContent = 'running…'; engine.handle({ type: 'speedTest', id: 1 }); });
 
-const pointerFile = await (await fetch('/products/ob1.json')).json() as { bundle: string };
+const pointerFile: { bundle: string } = await (await fetch('/products/ob1.json')).json() as { bundle: string };
 engine.handle({
   type: 'init', productUrl: new URL(`/${pointerFile.bundle}product.json`, location.href).href, selection: null,
   widthCss: canvas.clientWidth, heightCss: canvas.clientHeight, dpr: devicePixelRatio, stats: true,

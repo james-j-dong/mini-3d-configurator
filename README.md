@@ -22,7 +22,8 @@ npm run build                     # the site into dist/ (copies public/)
 
 - `npm run convert -- products/ob1 --inspect` lists every part in every source file, from one quick coarse read, to write the settings file from. One line per part instance: `"name" #occurrence`, its body count, size and centre (mm), and a coarse triangle count. A part made of several unnamed bodies gets an indented `body k` line per body (size and centre), and bodies under no named part are listed last as `(unnamed) body k`.
 - The converter compares the total size with `products/<id>/size-baseline.json` and exits 1 on growth over 10%. Rerun with `--update-baseline` when the growth is intended.
-- The table it prints has each model's group (`alwaysShown`, `variants`, `afterFirstView`), its triangles at the default level, the triangles face rules dropped and simplification removed, and its brotli size at both levels. A line after it totals each group.
+- The table it prints has each model's group (`alwaysShown`, `variants`, `afterFirstView`), how many of the file's bodies it merges, its triangles at the default level, the triangles face rules dropped and simplification removed, and its download size at both levels. A line after it totals each group.
+- Every part is written twice: `parts/<model>.glb` and a gzip copy `parts/<model>.glb.gz`. The viewer downloads the gzip copy (about a third smaller) and unpacks it in the browser; browsers that cannot (Safari before 16.4) download the plain file. The sizes the converter prints are the gzip copies, which is what a visitor downloads.
 - Rerun `convert` and then `stills` whenever a STEP file, a model, a finish, an assembly dimension or the render code in `src/viewer/render/` changes. The bundle version hashes all of these, so a look change gets a new bundle path instead of overwriting year-cached stills.
 
 ### Picking parts out of a source
@@ -42,6 +43,7 @@ A source can be a single-part STEP file or a whole assembly; parts keep their po
 - `bodies`: body positions within each matched instance, 0-based, as `--inspect` numbers them.
 - `within`: keeps only instances whose box centre lies inside this box (source millimetres, Y-up).
 - `leaveOut` (on a source): selections deliberately left out of the build.
+- `bodyCount` (on a source, optional): how many bodies the file has, as `--inspect` prints. With it set, the build fails when a new revision of the file has more or fewer, instead of quietly merging an added body into whichever model selects the whole file or that part name.
 - `placement` (on a source): where a separate part file's own frame sits in the product, as `{ "positionMm": [x, y, z], "rotationDeg": [x, y, z] }` (rotation first, XYZ order). The converter bakes it into the GLBs, so the parts load as in CAD. An assembly needs none. `parts`, `within`, face rules and `--inspect` all use the file's own frame.
 - **Every body of a source must belong to exactly one model or to `leaveOut`.** A body nobody claims, a body claimed twice, or a selection that matches nothing fails the build with a report of each body's part, size and position.
 - `simplifyErrorMm` (on a model): simplifies the merged mesh to this error in millimetres (the light level uses twice as much). Each part is otherwise tessellated at the same quality relative to its own size, whatever file it came from.
@@ -84,8 +86,14 @@ npm run convert -- products/ob1 && npm run stills -- ob1 && npm run deploy
 <script type="module" async src="https://<host>/v1/loader.js"></script>
 ```
 
-The page drives the viewer through `viewer.product`, `viewer.configuration`, `viewer.setConfiguration({...})` and the events
+The page drives the viewer through `viewer.product`, `viewer.configuration` (what is on screen), `viewer.requestedConfiguration`
+(what was last asked for: ahead of `configuration` while a pick loads, back to it if the pick is dropped), `viewer.setConfiguration({...})` and the events
 `productload`, `progress`, `ready`, `configurationchange`, `error` and `restored`.
+
+A configuration set before the 3D has started (right after the element exists, for example) is what the 3D opens with.
+
+Removing the element from the page shuts its 3D down and frees the worker and the graphics memory; moving it within the page does not.
+The same element put back later starts again with the configuration it had, and fires `productload` and `ready` again.
 
 `progress` carries `{ loaded, total, phase }`, one phase at a time:
 - `current`: the parts the first view waits for;
@@ -93,3 +101,7 @@ The page drives the viewer through `viewer.product`, `viewer.configuration`, `vi
 - `background`: every other part, loaded ahead of the next picks.
 
 A part that fails to download sends a non-fatal `error` with reason `model-load-failed: <model id>`. If it was an after-first-view part, nothing else changes.
+
+A fatal `error` means there is no 3D. Unless the product itself could not be read, the viewer shows the still for the current configuration and keeps following picks with stills.
+Its reasons are `webgl2-unavailable`, `product-not-found: …`, `invalid-product: …`, `model-load-failed: <model id>` (a part of the first view),
+`engine-load-failed: …` (the viewer code did not download) and `engine-failed: …` (anything unexpected inside the 3D engine).

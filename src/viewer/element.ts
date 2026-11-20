@@ -4,7 +4,7 @@ import type { BuiltProduct, Selection, SlotDef } from '../schema/product.ts';
 import { possibleModels, validateProduct, ProductError } from '../schema/validate.ts';
 import { configurationKey, normaliseSelection } from '../schema/configurations.ts';
 import type { DebugInfo, FromEngine, SpeedTestResult, ToEngine } from './protocol.ts';
-import { createEngineHost, type EngineHost } from './host.ts';
+import { createEngineHost, engineLoadFailed, type EngineHost } from './host.ts';
 import { resolveProductUrl } from './products.ts';
 import { createStatsPanel, type StatsPanel } from './stats.ts';
 
@@ -45,6 +45,8 @@ export class Mini3dViewer extends HTMLElement {
   private earlyPicks: Partial<Selection> = {};
   private flushQueued: boolean = false;
   private started: boolean = false;
+  /** Goes up each time the engine is torn down, so a start() still waiting on the network gives up. */
+  private startRun: number = 0;
   private engineInitialised: boolean = false;
   private engineAlive: boolean = false;
   private isReady: boolean = false;
@@ -69,7 +71,14 @@ export class Mini3dViewer extends HTMLElement {
     this.still.alt = '';
     this.still.decoding = 'async';
     this.still.addEventListener('error', () => { this.still.style.visibility = 'hidden'; });
-    this.still.addEventListener('load', () => { this.still.style.visibility = ''; });
+    this.still.addEventListener('load', () => {
+      this.still.style.visibility = '';
+      // The viewer's own still is up, so the copy loader.js painted behind it can go. Until `ready` a
+      // pick changes only this image, and stills are transparent: the old one would show through.
+      // Decoded first, so the background never goes a frame before the image is drawn. A decode
+      // that fails because the image changed meanwhile leaves it to that image's own load.
+      this.still.decode().then(() => this.clearLoaderStill(), () => {});
+    });
     this.hint = document.createElement('div');
     this.hint.className = 'hint';
     this.hint.textContent = 'Drag to spin';
@@ -86,6 +95,14 @@ export class Mini3dViewer extends HTMLElement {
   /** The configuration on screen. */
   get configuration(): Selection {
     return { ...this.shown };
+  }
+
+  /**
+   * The configuration last asked for. It runs ahead of `configuration` while a pick waits for its
+   * parts, and goes back to it if the pick is dropped. A picker shows this one as selected.
+   */
+  get requestedConfiguration(): Selection {
+    return { ...this.requested };
   }
 
   setConfiguration(partial: Partial<Selection>): void {
@@ -160,6 +177,31 @@ export class Mini3dViewer extends HTMLElement {
     this.resize?.disconnect();
     document.removeEventListener('visibilitychange', this.sendVisibility);
     this.send({ type: 'visible', visible: false });
+    // An element that is only moved leaves the page and comes back in the same task; one that is
+    // removed stays out. A removed viewer must not leave its worker or WebGL context behind: pages
+    // that swap their content without reloading would collect one for every swap.
+    queueMicrotask(() => { if (!this.isConnected) this.tearDown(); });
+  }
+
+  /** Shuts the 3D down and readies the element to start again, with the same configuration, if it returns to the page. */
+  private tearDown(): void {
+    if (!this.started) return;
+    this.startRun++;
+    this.host?.dispose();
+    this.host = null;
+    for (const [id, p] of this.pending) {
+      p.reject(new Error('the viewer was removed from the page'));
+      this.pending.delete(id);
+    }
+    if (this.builtProduct) {
+      this.earlyPicks = { ...this.requested }; // the next start opens with it
+      this.showStill(this.requested);
+    }
+    this.still.classList.remove('gone');
+    this.started = false;
+    this.engineInitialised = false;
+    this.engineAlive = false;
+    this.isReady = false;
   }
 
   attributeChangedCallback(name: string): void {
@@ -171,16 +213,18 @@ export class Mini3dViewer extends HTMLElement {
     const id: string | null = this.getAttribute('product');
     if (!id) return;
     this.started = true;
+    const run: number = this.startRun;
     this.updateStatsPanel();
     const origin: string = this.dataset.origin ?? location.origin;
     let defaultStillUrl: string;
     try {
       ({ productUrl: this.productUrl, defaultStillUrl } = await resolveProductUrl(id, origin));
     } catch (error) {
-      this.fire('error', { reason: `product-not-found: ${(error as Error).message}`, fatal: true });
+      if (run === this.startRun) this.fire('error', { reason: `product-not-found: ${(error as Error).message}`, fatal: true });
       return;
     }
-    this.still.src = defaultStillUrl;
+    if (run !== this.startRun) return; // removed from the page meanwhile
+    if (!this.builtProduct) this.still.src = defaultStillUrl; // back on the page: the still for its configuration is already up
 
     if (!hasWebGL2()) {
       this.fire('error', { reason: 'webgl2-unavailable', fatal: true });
@@ -188,7 +232,18 @@ export class Mini3dViewer extends HTMLElement {
       return;
     }
     this.engineAlive = true;
-    this.host = await createEngineHost(this.box, m => this.onEngineMessage(m));
+    let host: EngineHost;
+    try {
+      host = await createEngineHost(this.box, m => { if (run === this.startRun) this.onEngineMessage(m); });
+    } catch (error) {
+      if (run === this.startRun) this.onEngineMessage(engineLoadFailed(error));
+      return;
+    }
+    if (run !== this.startRun) { // removed from the page while the engine was loading
+      host.dispose();
+      return;
+    }
+    this.host = host;
     this.initEngineIfSized();
   }
 
@@ -197,7 +252,7 @@ export class Mini3dViewer extends HTMLElement {
     try {
       const response: Response = await fetch(this.productUrl);
       const product: BuiltProduct = validateProduct(await response.json()) as BuiltProduct;
-      this.onEngineMessage({ type: 'product', product });
+      this.onEngineMessage({ type: 'product', product, selection: product.defaultSelection });
     } catch (error) {
       this.fire('error', { reason: `invalid-product: ${(error as Error).message}`, fatal: true });
     }
@@ -214,8 +269,11 @@ export class Mini3dViewer extends HTMLElement {
   private initEngineIfSized(): void {
     if (!this.host || this.engineInitialised || this.widthCss <= 0 || this.heightCss <= 0) return;
     this.engineInitialised = true;
+    // Picks made before now open the 3D directly: it never shows the default configuration first.
+    const opening: Partial<Selection> = this.earlyPicks;
+    this.earlyPicks = {};
     this.send({
-      type: 'init', productUrl: this.productUrl, selection: null,
+      type: 'init', productUrl: this.productUrl, selection: Object.keys(opening).length > 0 ? opening : null,
       widthCss: this.widthCss, heightCss: this.heightCss, dpr: devicePixelRatio, stats: this.hasAttribute('stats'),
     });
     this.sendVisibility();
@@ -231,8 +289,9 @@ export class Mini3dViewer extends HTMLElement {
     switch (m.type) {
       case 'product': {
         this.builtProduct = m.product;
-        this.shown = { ...m.product.defaultSelection };
+        this.shown = { ...m.selection };
         this.requested = { ...this.shown };
+        if (!this.isReady) this.showStill(this.shown);
         this.fire('productload', { product: m.product });
         const early: Partial<Selection> = this.earlyPicks;
         this.earlyPicks = {};
@@ -311,7 +370,7 @@ export class Mini3dViewer extends HTMLElement {
     this.still.src = new URL(file, this.productUrl).href;
   }
 
-  /** loader.js paints the still as this element's background before the viewer code arrives; the canvas is transparent, so remove it once the 3D shows. */
+  /** loader.js paints the still as this element's background before the viewer code arrives. It goes once the viewer's own still is up, or at the latest when the 3D shows (the canvas is transparent). */
   private clearLoaderStill(): void {
     if (this.dataset.loaderStill === undefined) return;
     this.style.removeProperty('background');

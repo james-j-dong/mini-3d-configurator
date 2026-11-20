@@ -1,6 +1,6 @@
 // Writes one body as a welded, quantized, meshopt-compressed GLB in metres.
 // No UVs: finishes use world-space triplanar mapping in the viewer.
-import { Document, Logger, NodeIO, type Buffer } from '@gltf-transform/core';
+import { Document, Logger, NodeIO, type Buffer, type Mesh, type Primitive } from '@gltf-transform/core';
 import { EXTMeshoptCompression, KHRMeshQuantization } from '@gltf-transform/extensions';
 import { meshopt, quantize, weld } from '@gltf-transform/functions';
 import { MeshoptEncoder } from 'meshoptimizer';
@@ -11,16 +11,19 @@ export async function writeGlb(body: StepBody, metresPerUnit: number): Promise<U
   const doc: Document = new Document().setLogger(new Logger(Logger.Verbosity.WARN));
   const buffer: Buffer = doc.createBuffer();
   const positions: Float32Array<ArrayBuffer> = Float32Array.from(body.positions, v => v * metresPerUnit);
-  const primitive = doc.createPrimitive()
+  const primitive: Primitive = doc.createPrimitive()
     .setAttribute('POSITION', doc.createAccessor().setType('VEC3').setArray(positions).setBuffer(buffer))
     .setAttribute('NORMAL', doc.createAccessor().setType('VEC3').setArray(new Float32Array(body.normals)).setBuffer(buffer))
     .setIndices(doc.createAccessor().setType('SCALAR').setArray(new Uint32Array(body.indices)).setBuffer(buffer));
-  const mesh = doc.createMesh(body.name).addPrimitive(primitive);
+  const mesh: Mesh = doc.createMesh(body.name).addPrimitive(primitive);
   doc.createScene().addChild(doc.createNode(body.name).setMesh(mesh));
 
   await doc.transform(
     weld(),
-    quantize({ quantizePosition: 14, quantizeNormal: 10 }),
+    // Positions: 14 bits. There is no setting for normals here: at level 'high' meshopt always stores
+    // them as 8-bit octahedral, whatever precision they had before. Finer normals would need level
+    // 'medium' (and larger files).
+    quantize({ quantizePosition: 14 }),
     meshopt({ encoder: MeshoptEncoder, level: 'high' }),
   );
   const io: NodeIO = new NodeIO()

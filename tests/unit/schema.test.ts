@@ -44,6 +44,7 @@ test.each([
   ['selection box inside out', (p: any) => { p.models['plate-screws'].parts[0].within.minMm[1] = 300; }, 'models.plate-screws.parts[0].within'],
   ['root slot after the first view', (p: any) => { p.slots[0].afterFirstView = true; }, 'slots[0].afterFirstView'],
   ['left-out selection with a bad body', (p: any) => { p.sources.ob1.leaveOut[0].bodies = [-1]; }, 'sources.ob1.leaveOut[0].bodies'],
+  ['source with a body count that is not a whole number above zero', (p: any) => { p.sources.ob1.bodyCount = 1.5; }, 'sources.ob1.bodyCount'],
   ['source placement with a bad rotation', (p: any) => { p.sources['plate-6r-up'].placement.rotationDeg = [0, 180]; }, 'sources.plate-6r-up.placement.rotationDeg'],
   // After-first-view slots must hold one converted model that no required slot can hold, or the
   // engine and the stills could leave the part out without saying so.

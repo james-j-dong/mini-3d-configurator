@@ -60,16 +60,37 @@ function makeShadowTexture(): Texture {
   return texture;
 }
 
-/** Footprint = the larger of the bounds' x and z sizes; floor = the bounds' lowest y (both in metres). */
-export function shadowPlacement(bounds: Box3): { footprintM: number; floorYM: number } {
-  return { footprintM: Math.max(bounds.max.x - bounds.min.x, bounds.max.z - bounds.min.z), floorYM: bounds.min.y };
-}
+/** Where the contact shadow goes, in metres. */
+export interface ShadowPlacement { footprintM: number; floorYM: number; centreXM: number; centreZM: number }
 
 /**
- * Builds the environment map (prefiltered once with PMREM), the key light, and a contact shadow
- * quad sized 2.2 × the footprint, just above the floor so the product rests on it.
+ * Footprint = the larger of the bounds' x and z sizes; floor = the bounds' lowest y; centre = the
+ * middle of the bounds seen from above. A product need not be centred on its CAD origin.
  */
-export function createStudio(renderer: WebGLRenderer, footprintM: number, floorYM: number): Studio {
+export function shadowPlacement(bounds: Box3): ShadowPlacement {
+  return {
+    footprintM: Math.max(bounds.max.x - bounds.min.x, bounds.max.z - bounds.min.z),
+    floorYM: bounds.min.y,
+    centreXM: (bounds.min.x + bounds.max.x) / 2,
+    centreZM: (bounds.min.z + bounds.max.z) / 2,
+  };
+}
+
+/** The contact shadow: a soft dark quad 2.2 × the footprint, under the product's centre and just above the floor so the product rests on it. */
+export function createShadow(placement: ShadowPlacement): Mesh {
+  const size: number = placement.footprintM * SHADOW_SCALE;
+  const shadow: Mesh = new Mesh(
+    new PlaneGeometry(size, size),
+    new MeshBasicMaterial({ color: 0x000000, map: makeShadowTexture(), transparent: true, depthWrite: false }),
+  );
+  shadow.rotation.x = -Math.PI / 2;
+  shadow.position.set(placement.centreXM, placement.floorYM + SHADOW_LIFT_M, placement.centreZM);
+  shadow.renderOrder = -1;
+  return shadow;
+}
+
+/** Builds the environment map (prefiltered once with PMREM), the key light and the contact shadow. */
+export function createStudio(renderer: WebGLRenderer, placement: ShadowPlacement): Studio {
   const pmrem: PMREMGenerator = new PMREMGenerator(renderer);
   const studioScene: Scene = makeStudioScene();
   const environment: Texture = pmrem.fromScene(studioScene, 0.02).texture;
@@ -79,13 +100,5 @@ export function createStudio(renderer: WebGLRenderer, footprintM: number, floorY
   const keyLight: DirectionalLight = new DirectionalLight(0xffffff, 0.8);
   keyLight.position.set(-0.4, 0.6, 0.5);
 
-  const size: number = footprintM * SHADOW_SCALE;
-  const shadow: Mesh = new Mesh(
-    new PlaneGeometry(size, size),
-    new MeshBasicMaterial({ color: 0x000000, map: makeShadowTexture(), transparent: true, depthWrite: false }),
-  );
-  shadow.rotation.x = -Math.PI / 2;
-  shadow.position.y = floorYM + SHADOW_LIFT_M;
-  shadow.renderOrder = -1;
-  return { environment, shadow, keyLight };
+  return { environment, shadow: createShadow(placement), keyLight };
 }

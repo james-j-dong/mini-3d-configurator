@@ -32,6 +32,10 @@ export function bucketMm(targetMm: number): number {
  * One readStepFile pass per distinct bucket that the bodies in `only` need (default: all bodies), at the
  * level's angular tolerance. Each body comes from its own bucket's pass; bodies not in `only` keep the
  * reference tessellation, so flat indices stay aligned. Throws if a pass's body count differs from the reference.
+ *
+ * Every pass reads and meshes the whole file, because occt-import-js cannot read chosen parts only.
+ * The cost is therefore passes × file size, nearly all of it inside OpenCascade: the 23 MB OB1
+ * assembly takes 8 to 11 s a pass, and its 10 passes are most of a conversion.
  */
 export async function readAtDetail(path: string, reference: StepFile, level: DetailLevel, only?: number[]): Promise<StepFile> {
   const wanted: number[] = only ?? reference.bodies.map((_, b) => b);

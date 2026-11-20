@@ -49,7 +49,7 @@ export function resolveConfiguration(p: Product, s: Selection): ResolvedConfigur
   for (const option of p.options) {
     const value: OptionValue = option.values[findValueIndex(option, s[option.name])];
     for (const set of value.sets) {
-      const target = resolved[set.slot];
+      const target: { model: string; finish: string } = resolved[set.slot];
       if (set.model !== undefined) target.model = set.model;
       if (set.finish !== undefined) target.finish = set.finish;
     }

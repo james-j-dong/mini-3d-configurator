@@ -1,10 +1,11 @@
 import { expect, test } from 'vitest';
 import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { gunzipSync } from 'node:zlib';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Product } from '../../src/schema/product.ts';
 import { validateProduct } from '../../src/schema/validate.ts';
-import { compareWithBaseline, computeVersion, groupModels, lookFingerprint, type SizeReport } from '../../src/convert/bundle.ts';
+import { compareWithBaseline, computeVersion, groupModels, lookFingerprint, partFiles, type SizeReport } from '../../src/convert/bundle.ts';
 
 const ob1: Product = validateProduct(JSON.parse(readFileSync('products/ob1/product.json', 'utf8')));
 
@@ -16,10 +17,24 @@ test('same inputs give the same version', () => {
 });
 
 test('flags growth over 10%', () => {
-  const r = (t: number): SizeReport => ({ version: 'v', brotliBytes: {}, totalBrotliBytes: t });
+  const r = (t: number): SizeReport => ({ version: 'v', gzipBytes: {}, totalGzipBytes: t });
   expect(compareWithBaseline(r(1110), r(1000)).flagged).toBe(true);
   expect(compareWithBaseline(r(1090), r(1000)).flagged).toBe(false);
   expect(compareWithBaseline(r(5000), null).flagged).toBe(false);
+});
+
+test('a baseline written when sizes were measured another way counts as no baseline', () => {
+  const old = { version: 'v', brotliBytes: {}, totalBrotliBytes: 1000 } as unknown as SizeReport;
+  expect(compareWithBaseline({ version: 'w', gzipBytes: {}, totalGzipBytes: 5000 }, old)).toEqual({ deltaRatio: 0, flagged: false });
+});
+
+test('every part is published as the GLB and as a gzip copy of it', () => {
+  const glb = new Uint8Array(Array.from({ length: 4000 }, (_, i) => (i * 13) % 97));
+  const files = partFiles('housing.light', glb);
+  expect(files.map(([path]) => path)).toEqual(['parts/housing.light.glb', 'parts/housing.light.glb.gz']);
+  expect(files[0][1]).toBe(glb);
+  expect(files[1][1].length).toBeLessThan(glb.length);
+  expect(new Uint8Array(gunzipSync(files[1][1]))).toEqual(glb);
 });
 
 test('groups models into always shown, variants and after the first view', () => {

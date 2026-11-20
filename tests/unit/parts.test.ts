@@ -72,3 +72,10 @@ test('error reports describe bodies that sit under no named part', () => {   // 
   expect(describeBody(index, 6)).toBe('(unnamed) body 6 (1.0 × 1.0 × 1.0 mm at 0.5, 0.5, 0.5)');
   expect(describeBody(index, 3)).toBe('"Plate" #0 body 1 (60.0 × 3.0 × 50.0 mm at 0.0, 101.5, 0.0)');
 });
+
+test('a source that states its body count fails when the file no longer has that many', () => {
+  const everything = [{ id: 'everything', parts: [{}] }]; // a whole-file selection would quietly swallow an added body
+  expect(claimBodies('asm', index, everything, [], 7)).toEqual(new Map([['everything', [0, 1, 2, 3, 4, 5, 6]]]));
+  expect(() => claimBodies('asm', index, everything, [], 6)).toThrow(/asm: the file has 7 bodies, but its "bodyCount" says 6/);
+  expect(() => claimBodies('asm', index, everything, [], 8)).toThrow(/asm: the file has 7 bodies, but its "bodyCount" says 8/);
+});

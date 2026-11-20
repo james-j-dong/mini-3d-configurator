@@ -30,7 +30,7 @@ export interface DebugInfo {
 }
 
 export type ToEngine =
-  | { type: 'init'; productUrl: string; selection: Selection | null; widthCss: number; heightCss: number; dpr: number; stats: boolean; canvas?: OffscreenCanvas }
+  | { type: 'init'; productUrl: string; selection: Partial<Selection> | null; widthCss: number; heightCss: number; dpr: number; stats: boolean; canvas?: OffscreenCanvas }
   | { type: 'resize'; widthCss: number; heightCss: number; dpr: number }
   // x and y are CSS px within the box. tMs is the pointer event's own timeStamp: when it happened, not when
   // the engine got round to it. It is only ever compared with other pointer messages' tMs.
@@ -44,7 +44,7 @@ export type ToEngine =
   | { type: 'loseContext' };
 
 export type FromEngine =
-  | { type: 'product'; product: BuiltProduct }
+  | { type: 'product'; product: BuiltProduct; selection: Selection } // selection: the configuration the engine starts with
   | { type: 'progress'; loaded: number; total: number; phase: 'current' | 'deferred' | 'background' }
   | { type: 'ready' }
   | { type: 'configured'; selection: Selection }

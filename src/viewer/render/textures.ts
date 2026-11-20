@@ -1,5 +1,6 @@
 // Carbon textures generated on the device from fixed seeds, so they cost no download.
-// Uses typed arrays and OffscreenCanvas only (never `document`), so it runs in the render worker.
+// Uses typed arrays and OffscreenCanvas, so it runs in the render worker. On the main thread of a
+// browser without OffscreenCanvas (Safari before 16.4) it draws on a detached <canvas> instead.
 import {
   DataTexture, LinearFilter, LinearMipmapLinearFilter, NoColorSpace, RepeatWrapping, RGBAFormat, SRGBColorSpace,
   UnsignedByteType, type ColorSpace, type Texture,
@@ -124,7 +125,18 @@ function chipOutline(len: number, wid: number, rand: () => number): Point[] {
 }
 
 /** Draws a chip with a feathered edge: once 1.5 px larger at 35% alpha, then its core. */
-function drawChip(ctx: OffscreenCanvasRenderingContext2D, points: Point[], x: number, y: number, angle: number, fill: string): void {
+type Context2D = OffscreenCanvasRenderingContext2D | CanvasRenderingContext2D;
+
+/** A size × size canvas to draw on, never shown. */
+function context2d(size: number): Context2D {
+  if (typeof OffscreenCanvas === 'function') return new OffscreenCanvas(size, size).getContext('2d')!;
+  const canvas: HTMLCanvasElement = document.createElement('canvas');
+  canvas.width = size;
+  canvas.height = size;
+  return canvas.getContext('2d')!;
+}
+
+function drawChip(ctx: Context2D, points: Point[], x: number, y: number, angle: number, fill: string): void {
   ctx.save();
   ctx.translate(x, y);
   ctx.rotate(angle);
@@ -148,10 +160,8 @@ function drawChip(ctx: OffscreenCanvasRenderingContext2D, points: Point[], x: nu
 function makeForged(): Pick<FinishTextures, 'forgedAlbedo' | 'forgedRoughness'> {
   const size: number = FORGED_SIZE_PX;
   const rand: () => number = mulberry32(42);
-  const albedoCanvas: OffscreenCanvas = new OffscreenCanvas(size, size);
-  const roughCanvas: OffscreenCanvas = new OffscreenCanvas(size, size);
-  const c: OffscreenCanvasRenderingContext2D = albedoCanvas.getContext('2d')!;
-  const r: OffscreenCanvasRenderingContext2D = roughCanvas.getContext('2d')!;
+  const c: Context2D = context2d(size);
+  const r: Context2D = context2d(size);
   c.fillStyle = '#0a0a0a';
   c.fillRect(0, 0, size, size);
   const background: number = Math.round(FORGED_BACKGROUND_ROUGHNESS * 255);
@@ -195,7 +205,7 @@ function makeForged(): Pick<FinishTextures, 'forgedAlbedo' | 'forgedRoughness'> 
       }
     }
   }
-  const pixels = (ctx: OffscreenCanvasRenderingContext2D): Uint8Array => new Uint8Array(ctx.getImageData(0, 0, size, size).data.buffer);
+  const pixels = (ctx: Context2D): Uint8Array => new Uint8Array(ctx.getImageData(0, 0, size, size).data.buffer);
   return {
     forgedAlbedo: toTexture(pixels(c), size, SRGBColorSpace),
     forgedRoughness: toTexture(pixels(r), size, NoColorSpace),

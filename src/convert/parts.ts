@@ -127,13 +127,23 @@ export function describeBody(index: PartIndex, body: number): string {
   return `${where} (${size} mm at ${centre})`;
 }
 
-/** Model id → its sorted body indices. Throws ConvertError on unclaimed, doubly claimed, or empty selections. */
+/**
+ * Model id → its sorted body indices. Throws ConvertError on unclaimed, doubly claimed, or empty
+ * selections, and when the file's body count is not the `expectedBodyCount` its settings state.
+ */
 export function claimBodies(
   sourceKey: string,
   index: PartIndex,
   models: Array<{ id: string; parts: PartSelection[] }>,
   leaveOut: PartSelection[],
+  expectedBodyCount?: number,
 ): Map<string, number[]> {
+  if (expectedBodyCount !== undefined && index.boxes.length !== expectedBodyCount) {
+    throw new ConvertError(
+      `${sourceKey}: the file has ${index.boxes.length} bodies, but its "bodyCount" says ${expectedBodyCount}. `
+      + 'If the file changed on purpose, see what is in it with --inspect, check the selections, then update the number.',
+    );
+  }
   const claimedBy: Array<string | undefined> = new Array<string | undefined>(index.boxes.length);
 
   const claim = (claimant: string, selections: PartSelection[]): number[] => {

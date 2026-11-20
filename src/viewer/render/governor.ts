@@ -19,6 +19,8 @@ const PROBE_AFTER_MS: number = 10_000;
 const FAILED_PROBE_WINDOW_FRAMES: number = 120;
 const PROBE_BACKOFF_MS: number = 60_000;
 
+const ascending = (a: number, b: number): number => a - b;
+
 /**
  * Feed it only frames rendered back to back. Over the last 60 such frames, a median above 18 ms
  * or two frames over 33.4 ms steps down one level. Both limits are for a 60 Hz display and stretch
@@ -34,6 +36,8 @@ export class QualityGovernor {
 
   private index: number = 0;
   private frames: number[] = [];
+  /** Reused for sorting the window, so judging a frame allocates nothing. */
+  private readonly sorted: number[] = [];
   /** Rendered time since the last level change or trigger. */
   private quietMs: number = 0;
   /** Frames recorded since the last probe up; null when the last change was not a probe. */
@@ -75,9 +79,16 @@ export class QualityGovernor {
 
   private triggered(): boolean {
     const stretch: number = Math.max(1, this.displayMs / REFERENCE_DISPLAY_MS);
-    const sorted: number[] = [...this.frames].sort((a, b) => a - b);
+    const slowLimitMs: number = SLOW_FRAME_MS * stretch;
+    const sorted: number[] = this.sorted;
+    sorted.length = 0;
+    let slow: number = 0;
+    for (const ms of this.frames) {
+      sorted.push(ms);
+      if (ms > slowLimitMs) slow++;
+    }
+    sorted.sort(ascending);
     const median: number = (sorted[WINDOW_FRAMES / 2 - 1] + sorted[WINDOW_FRAMES / 2]) / 2;
-    const slow: number = this.frames.filter(ms => ms > SLOW_FRAME_MS * stretch).length;
     return median > MEDIAN_LIMIT_MS * stretch || slow >= SLOW_FRAMES_TO_TRIGGER;
   }
 

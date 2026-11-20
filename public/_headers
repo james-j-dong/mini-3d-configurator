@@ -1,12 +1,16 @@
 /v1/loader.js
   Cache-Control: public, max-age=300
   Access-Control-Allow-Origin: *
+  Timing-Allow-Origin: *
 /v1/assets/*
   Cache-Control: public, max-age=31536000, immutable
   Access-Control-Allow-Origin: *
+  Timing-Allow-Origin: *
 /products/*
   Cache-Control: public, max-age=60
   Access-Control-Allow-Origin: *
+  Timing-Allow-Origin: *
 /bundles/*
   Cache-Control: public, max-age=31536000, immutable
   Access-Control-Allow-Origin: *
+  Timing-Allow-Origin: *

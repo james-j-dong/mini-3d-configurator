@@ -7,6 +7,7 @@
       "file": "assets/source/OB1-V2-ALL.STEP",
       "units": "mm",
       "upAxis": "y",
+      "bodyCount": 132,
       "leaveOut": [
         { "part": "SHIFT_KNOB_ROUND (M12x1.25)_H" },
         { "part": "SHIFT_KNOB_SENNA (M12x1.25)_PRODUCTION" },
@@ -15,16 +16,17 @@
         { "part": "OB1-SHPL-7R_V15_7R", "bodies": [4, 5] }
       ]
     },
-    "knob-round": { "file": "assets/source/SHIFT_KNOB_ROUND (M12x1.25)_REV2 (1).STEP", "units": "mm", "upAxis": "y" },
-    "knob-senna": { "file": "assets/source/SHIFT_KNOB_SENNA (M12x1.25)_REV2 (2).STEP", "units": "mm", "upAxis": "y" },
-    "plate-6r-down": { "file": "assets/source/OB1-SHPL_6RDOWN_AL_REV5.STEP", "units": "mm", "upAxis": "y", "placement": { "positionMm": [0, 100.25, 0] } },
+    "knob-round": { "file": "assets/source/SHIFT_KNOB_ROUND (M12x1.25)_REV2 (1).STEP", "units": "mm", "upAxis": "y", "bodyCount": 1 },
+    "knob-senna": { "file": "assets/source/SHIFT_KNOB_SENNA (M12x1.25)_REV2 (2).STEP", "units": "mm", "upAxis": "y", "bodyCount": 1 },
+    "plate-6r-down": { "file": "assets/source/OB1-SHPL_6RDOWN_AL_REV5.STEP", "units": "mm", "upAxis": "y", "bodyCount": 2, "placement": { "positionMm": [0, 100.25, 0] } },
     "plate-6r-up": {
       "file": "assets/source/OB1-SHPL_6RUP_AL_REV5.STEP",
       "units": "mm",
       "upAxis": "y",
+      "bodyCount": 2,
       "placement": { "positionMm": [0, 100.25, 0], "rotationDeg": [0, 180, 0] }
     },
-    "plate-7r": { "file": "assets/source/OB1-SHPL-7R_AL_REV5.STEP", "units": "mm", "upAxis": "y", "placement": { "positionMm": [0, 100.25, 0] } }
+    "plate-7r": { "file": "assets/source/OB1-SHPL-7R_AL_REV5.STEP", "units": "mm", "upAxis": "y", "bodyCount": 2, "placement": { "positionMm": [0, 100.25, 0] } }
   },
   "models": {
     "housing": {

@@ -43,6 +43,12 @@ export interface SourceDef {
   file: string;
   units: 'mm' | 'm' | 'in';
   upAxis: 'y' | 'z';
+  /**
+   * How many bodies the file has. When given, the converter fails if the file has more or fewer: a
+   * new revision with an added body would otherwise be merged into whichever model selects the
+   * whole file or that part name. `npm run convert -- <dir> --inspect` prints the number.
+   */
+  bodyCount?: number;
   /** Geometry deliberately left out of the build. Everything else must belong to exactly one model. */
   leaveOut?: PartSelection[];
   /**
@@ -97,6 +103,8 @@ export interface ModelFiles { default: string; light: string }
 export interface BuiltProduct extends Product {
   version: string;
   files: Record<string, ModelFiles>;
+  /** Every part file also exists gzip-compressed at its own path plus `.gz`; the viewer downloads that one where it can unpack it. */
+  gzipParts?: boolean;
   stills: { pattern: string; sizePx: number };
 }
 

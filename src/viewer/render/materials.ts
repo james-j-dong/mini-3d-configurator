@@ -1,4 +1,4 @@
-// Finishes from the settings file → Three.js materials, for one quality tier.
+// Finishes from the settings file → Three.js materials, for both quality tiers.
 // Carbon uses world-space triplanar mapping, so converted parts need no UVs and curved knobs show no seams.
 import { Color, MeshPhysicalMaterial, MeshStandardMaterial, type Material, type Texture, type WebGLProgramParametersWithUniforms } from 'three';
 import type { FinishDef, Product } from '../../schema/product.ts';
@@ -112,13 +112,31 @@ function createMaterial(finish: FinishDef, t: FinishTextures, tier: QualityTier)
   }
 }
 
-/** One material per finish id, for the given tier. */
-export function createMaterials(p: Product, t: FinishTextures, tier: QualityTier): Map<string, Material> {
-  const materials: Map<string, Material> = new Map();
+/** Only the carbon finishes change with the tier (clear coat and weave normals). */
+function differsByTier(finish: FinishDef): boolean {
+  return finish.kind === 'carbonWeave' || finish.kind === 'forgedCarbon';
+}
+
+/**
+ * One material per finish id in each tier. A finish that looks the same in both tiers is a single
+ * material in both maps, so the warm-up draws each part with it once, not twice.
+ */
+export function createMaterialTiers(p: Product, t: FinishTextures): Record<QualityTier, Map<string, Material>> {
+  const full: Map<string, Material> = new Map();
+  const lean: Map<string, Material> = new Map();
   for (const [id, finish] of Object.entries(p.finishes)) {
-    const m: Material = createMaterial(finish, t, tier);
-    m.name = `${id}:${tier}`;
-    materials.set(id, m);
+    const fullMaterial: Material = createMaterial(finish, t, 'full');
+    if (!differsByTier(finish)) {
+      fullMaterial.name = id;
+      full.set(id, fullMaterial);
+      lean.set(id, fullMaterial);
+      continue;
+    }
+    const leanMaterial: Material = createMaterial(finish, t, 'lean');
+    fullMaterial.name = `${id}:full`;
+    leanMaterial.name = `${id}:lean`;
+    full.set(id, fullMaterial);
+    lean.set(id, leanMaterial);
   }
-  return materials;
+  return { full, lean };
 }
